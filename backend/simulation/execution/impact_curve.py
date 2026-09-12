@@ -26,3 +26,9 @@ class ImpactCurveExecutionModel:
         with localcontext() as context:
             context.prec = 38
             return self.coefficient_bps * (participation ** self.exponent)
+
+    def maximum_quantity(self, bar_volume: Decimal) -> Decimal:
+        return as_decimal(bar_volume, "bar_volume") * self.max_participation
+
+    def slippage_for(self, quantity: Decimal, bar_volume: Decimal) -> Decimal:
+        return self.impact_bps(quantity, bar_volume)

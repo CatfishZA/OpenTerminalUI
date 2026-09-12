@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from backend.simulation.domain.events import LedgerEntry
+from backend.simulation.domain.events import SimulationEvent
 from backend.simulation.domain.fills import Fill
 from backend.simulation.domain.identifiers import InstrumentId
 from backend.simulation.domain.market import as_decimal, require_aware
@@ -72,3 +73,6 @@ class SimulationResult:
     daily_returns: tuple[Decimal, ...] = ()
     drawdown: tuple[Decimal, ...] = ()
     data_quality: dict[str, Any] = field(default_factory=dict)
+    events: tuple[SimulationEvent, ...] = ()
+    reconciliation: dict[str, Any] = field(default_factory=dict)
+    result_hash: str = ""

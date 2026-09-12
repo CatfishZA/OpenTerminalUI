@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from backend.simulation.domain.market import as_decimal
+from backend.simulation.domain.enums import OrderSide
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,3 +30,8 @@ class VolumeParticipationExecutionModel:
             return self.base_slippage_bps
         participation = min(as_decimal(quantity, "quantity") / volume, self.max_participation)
         return self.base_slippage_bps + self.volume_weighted_bps * participation
+
+    def execution_price(self, base_price: Decimal, side: OrderSide, quantity: Decimal, volume: Decimal) -> Decimal:
+        bps = self.slippage_for(quantity, volume)
+        direction = Decimal("1") if side is OrderSide.BUY else Decimal("-1")
+        return base_price * (Decimal("1") + direction * bps / Decimal("10000"))

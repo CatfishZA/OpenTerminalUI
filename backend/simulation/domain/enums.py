@@ -37,6 +37,12 @@ class TimeInForce(StrEnum):
     GTC = "GTC"
 
 
+class DailyBarPathPolicy(StrEnum):
+    OHLC = "OHLC"
+    OLHC = "OLHC"
+    WORST_CASE = "WORST_CASE"
+
+
 class OrderStatus(StrEnum):
     CREATED = "CREATED"
     ACCEPTED = "ACCEPTED"

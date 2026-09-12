@@ -23,6 +23,8 @@ class Order:
     tif: TimeInForce
     submitted_at: datetime
     accepted_at: datetime | None = None
+    eligible_at: datetime | None = None
+    completed_at: datetime | None = None
     limit_price: Decimal | None = None
     stop_price: Decimal | None = None
     status: OrderStatus = OrderStatus.CREATED
@@ -40,6 +42,12 @@ class Order:
             require_aware(self.accepted_at, "accepted_at")
             if self.accepted_at < self.submitted_at:
                 raise ValueError("accepted_at cannot precede submitted_at")
+        if self.eligible_at is not None:
+            require_aware(self.eligible_at, "eligible_at")
+            if self.eligible_at < self.submitted_at:
+                raise ValueError("eligible_at cannot precede submitted_at")
+        if self.completed_at is not None:
+            require_aware(self.completed_at, "completed_at")
         if quantity <= 0 or remaining < 0 or remaining > quantity:
             raise ValueError("order quantity/remaining quantity is invalid")
         if self.order_type is OrderType.LIMIT and self.limit_price is None:

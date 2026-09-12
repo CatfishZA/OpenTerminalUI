@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from uuid import uuid4
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,10 @@ from backend.simulation.persistence.models import (
 )
 from backend.simulation.persistence.repositories import SqlAlchemySimulationRunRepository
 from backend.simulation.services.manifest_service import ManifestService
+from backend.simulation.domain.enums import SimulationRunStatus
+from backend.simulation.domain.results import SimulationResult
+if TYPE_CHECKING:
+    from backend.simulation.engine.daily_simulator import DailySimulator
 
 
 class SimulationNotFoundError(LookupError):
@@ -39,6 +44,24 @@ class SimulationService:
         manifest = self.manifest_service.build(run_id, spec)
         self.run_repository.create(run_id, spec, manifest)
         return run_id
+
+    async def execute(self, run_id: str, spec: SimulationRunSpec, simulator: DailySimulator) -> SimulationResult:
+        """Run the deterministic engine and enforce the canonical status lifecycle."""
+        try:
+            self.run_repository.update_status(run_id, SimulationRunStatus.VALIDATING_DATA)
+            self.run_repository.update_status(run_id, SimulationRunStatus.BUILDING_MANIFEST)
+            manifest = self.run_repository.get_manifest(run_id)
+            if manifest is None:
+                raise SimulationNotFoundError(run_id)
+            self.run_repository.update_status(run_id, SimulationRunStatus.RUNNING)
+            result = simulator.run(spec, run_id=run_id, manifest=manifest)
+            self.run_repository.update_status(run_id, SimulationRunStatus.FINALIZING)
+            self.run_repository.update_status(run_id, SimulationRunStatus.DONE)
+            return result
+        except Exception as exc:
+            self.db.rollback()
+            self.run_repository.update_status(run_id, SimulationRunStatus.FAILED, error=str(exc))
+            raise
 
     def _require(self, run_id: str):
         row = self.run_repository.get(run_id)

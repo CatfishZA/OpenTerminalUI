@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, time, timezone
+from decimal import Decimal
 from typing import Iterable
 
 from sqlalchemy.orm import Session
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 from backend.services.price_series_service import PricePoint, get_price_series
 from backend.simulation.domain.identifiers import InstrumentId
 from backend.simulation.domain.market import MarketBar, MarketDataManifest
+from backend.models import PriceEodORM
 
 
 class VersionedDataAdapter:
@@ -64,6 +66,27 @@ class VersionedDataAdapter:
     def iter_daily_events(
         self, instruments: list[InstrumentId], start: date, end: date
     ) -> Iterable[MarketBar]:
-        raise NotImplementedError(
-            "Calendar-resolved market event timestamps are intentionally deferred to Phase 1B; use load_series in Phase 1A"
-        )
+        if not self.data_version_id:
+            raise ValueError("DATA_VERSION_REQUIRED: persisted versioned data requires data_version_id")
+        requested = {item.key: item for item in instruments}
+        events: list[MarketBar] = []
+        for instrument in sorted(instruments, key=lambda item: item.key):
+            rows = self.db.query(PriceEodORM).filter(
+                PriceEodORM.symbol == instrument.symbol,
+                PriceEodORM.data_version_id == self.data_version_id,
+                PriceEodORM.trade_date >= start.isoformat(),
+                PriceEodORM.trade_date <= end.isoformat(),
+            ).order_by(PriceEodORM.trade_date).all()
+            if not rows:
+                raise ValueError(f"INSTRUMENT_DATA_NOT_FOUND: {instrument.key}")
+            for row in rows:
+                session = date.fromisoformat(row.trade_date)
+                events.append(MarketBar(
+                    instrument=instrument,
+                    ts_open=datetime.combine(session, time(14, 30), timezone.utc),
+                    ts_close=datetime.combine(session, time(21, 0), timezone.utc),
+                    open=Decimal(str(row.open)), high=Decimal(str(row.high)),
+                    low=Decimal(str(row.low)), close=Decimal(str(row.close)),
+                    volume=Decimal(str(row.volume)), data_version_id=self.data_version_id,
+                ))
+        return sorted(events, key=lambda item: (item.ts_open, item.instrument.key))

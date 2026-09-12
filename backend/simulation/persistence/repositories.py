@@ -10,9 +10,16 @@ from backend.simulation.domain.events import LedgerEntry, SimulationEvent
 from backend.simulation.domain.run import RunManifest, RunStatus, SimulationRunSpec
 from backend.simulation.persistence.models import (
     SimulationEventORM,
+    SimulationFillORM,
     SimulationLedgerEntryORM,
+    SimulationOrderORM,
+    SimulationPortfolioSnapshotORM,
+    SimulationPositionSnapshotORM,
     SimulationRunORM,
 )
+from backend.simulation.domain.fills import Fill
+from backend.simulation.domain.orders import Order
+from backend.simulation.domain.results import PortfolioSnapshot, PositionSnapshot
 from backend.simulation.persistence.serializers import to_primitive
 
 
@@ -73,6 +80,10 @@ class SqlAlchemySimulationRunRepository:
             return False
         row.status = status.value
         row.error = error
+        if status is SimulationRunStatus.RUNNING and row.started_at is None:
+            row.started_at = datetime.now().astimezone()
+        if status in {SimulationRunStatus.DONE, SimulationRunStatus.FAILED, SimulationRunStatus.CANCELLED}:
+            row.finished_at = datetime.now().astimezone()
         self.db.commit()
         return True
 
@@ -127,3 +138,57 @@ class SqlAlchemyLedgerRepository:
 
     def iter_run(self, run_id: str) -> Iterable[SimulationLedgerEntryORM]:
         return self.db.query(SimulationLedgerEntryORM).filter_by(run_id=run_id).order_by(SimulationLedgerEntryORM.event_time).all()
+
+
+class SqlAlchemySimulationRecordRepository:
+    """Canonical record sink used by the daily engine."""
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def save_order(self, order: Order) -> None:
+        row = self.db.get(SimulationOrderORM, order.id) or SimulationOrderORM(id=order.id, run_id=order.run_id)
+        row.account_id = order.account_id; row.instrument_key = order.instrument.key
+        row.side = order.side.value; row.order_type = order.order_type.value
+        row.quantity = order.quantity; row.remaining_quantity = order.remaining_quantity; row.tif = order.tif.value
+        row.limit_price = order.limit_price; row.stop_price = order.stop_price; row.status = order.status.value
+        row.submitted_at = order.submitted_at; row.accepted_at = order.accepted_at; row.completed_at = order.completed_at
+        row.strategy_order_id = order.strategy_order_id; row.parent_order_id = order.parent_order_id
+        row.metadata_json = to_primitive({**order.metadata, "eligible_at": order.eligible_at})
+        self.db.add(row); self.db.commit()
+
+    def save_fill(self, fill: Fill) -> None:
+        self.db.add(SimulationFillORM(
+            id=fill.id, run_id=fill.run_id, order_id=fill.order_id, account_id=fill.account_id,
+            instrument_key=fill.instrument.key, side=fill.side.value, quantity=fill.quantity, price=fill.price,
+            commission=fill.commission, fees=fill.fees, slippage_bps=fill.slippage_bps,
+            executed_at=fill.executed_at, execution_model=fill.execution_model,
+            liquidity_flag=fill.liquidity_flag, metadata_json={},
+        )); self.db.commit()
+
+    def save_ledger(self, entry: LedgerEntry) -> None:
+        if self.db.get(SimulationLedgerEntryORM, entry.id) is None:
+            self.db.add(SimulationLedgerEntryORM(
+                id=entry.id, run_id=entry.run_id, account_id=entry.account_id, event_time=entry.ts,
+                entry_type=entry.entry_type.value, currency=entry.currency, amount=entry.amount,
+                instrument_key=entry.instrument.key if entry.instrument else None, order_id=entry.order_id,
+                fill_id=entry.fill_id, corporate_action_id=entry.corporate_action_id,
+                metadata_json=to_primitive(entry.metadata),
+            )); self.db.commit()
+
+    def save_portfolio_snapshot(self, item: PortfolioSnapshot) -> None:
+        self.db.add(SimulationPortfolioSnapshotORM(
+            run_id=item.run_id, account_id=item.account_id, snapshot_time=item.snapshot_time,
+            cash_settled=item.cash_settled, cash_unsettled=item.cash_unsettled, cash_reserved=item.cash_reserved,
+            gross_exposure=item.gross_exposure, net_exposure=item.net_exposure, market_value=item.market_value,
+            realized_pnl=item.realized_pnl, unrealized_pnl=item.unrealized_pnl, fees=item.fees,
+            equity=item.equity, buying_power=item.buying_power,
+        )); self.db.commit()
+
+    def save_position_snapshot(self, item: PositionSnapshot) -> None:
+        self.db.add(SimulationPositionSnapshotORM(
+            run_id=item.run_id, account_id=item.account_id, snapshot_time=item.snapshot_time,
+            instrument_key=item.instrument.key, quantity=item.quantity, average_cost=item.average_cost,
+            mark_price=item.mark_price, market_value=item.market_value,
+            realized_pnl=item.realized_pnl, unrealized_pnl=item.unrealized_pnl,
+        )); self.db.commit()

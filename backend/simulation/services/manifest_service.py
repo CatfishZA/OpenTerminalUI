@@ -9,7 +9,7 @@ from typing import Any
 from backend.simulation.domain.run import RunManifest, SimulationRunSpec
 from backend.simulation.persistence.serializers import to_primitive
 
-ENGINE_VERSION = "sim-daily-scaffold-v1a"
+ENGINE_VERSION = "sim-daily-v1b"
 
 
 def canonical_json(value: Any) -> str:
@@ -41,6 +41,9 @@ class ManifestService:
         execution_hash = sha256_value(spec.execution_profile)
         commission_hash = sha256_value(spec.commission_profile)
         settlement_hash = sha256_value(spec.settlement_profile)
+        daily_bar_path_policy = str(spec.execution_profile.get("daily_bar_path_policy", "WORST_CASE")).upper()
+        if daily_bar_path_policy not in {"OHLC", "OLHC", "WORST_CASE"}:
+            raise ValueError("invalid daily_bar_path_policy")
         request_hash = sha256_value(spec)
         deterministic = {
             "engine_version": self.engine_version,
@@ -56,6 +59,7 @@ class ManifestService:
             "execution_profile_hash": execution_hash,
             "commission_profile_hash": commission_hash,
             "settlement_profile_hash": settlement_hash,
+            "daily_bar_path_policy": daily_bar_path_policy,
             "seed": spec.seed,
             "request_hash": request_hash,
         }

@@ -67,6 +67,7 @@ class RunManifest:
     execution_profile_hash: str
     commission_profile_hash: str
     settlement_profile_hash: str
+    daily_bar_path_policy: str
     seed: int
     request_hash: str
     manifest_hash: str
@@ -74,6 +75,8 @@ class RunManifest:
 
     def __post_init__(self) -> None:
         require_aware(self.created_at, "created_at")
+        if self.daily_bar_path_policy not in {"OHLC", "OLHC", "WORST_CASE"}:
+            raise ValueError("invalid daily_bar_path_policy")
 
 
 @dataclass(frozen=True, slots=True)

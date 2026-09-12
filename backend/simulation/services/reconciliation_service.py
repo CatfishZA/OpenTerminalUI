@@ -4,6 +4,10 @@ from decimal import Decimal
 from typing import Iterable
 
 from backend.simulation.domain.events import LedgerEntry
+from backend.simulation.domain.account import AccountState
+from backend.simulation.domain.enums import OrderSide
+from backend.simulation.domain.fills import Fill
+from backend.simulation.domain.positions import Position
 
 
 class ReconciliationService:
@@ -20,3 +24,26 @@ class ReconciliationService:
     def assert_cash(expected: Decimal, actual: Decimal) -> None:
         if expected != actual:
             raise ValueError(f"LEDGER_RECONCILIATION_FAILED: expected {expected}, actual {actual}")
+
+    def reconcile(
+        self,
+        opening_cash: Decimal,
+        entries: Iterable[LedgerEntry],
+        fills: Iterable[Fill],
+        account: AccountState,
+    ) -> dict[str, bool]:
+        entries = tuple(entries)
+        economic_entries = tuple(entry for entry in entries if not entry.metadata.get("opening_balance"))
+        ledger_cash = self.cash_from_ledger(opening_cash, economic_entries, account.base_currency)
+        self.assert_cash(ledger_cash, account.base_cash.total)
+        quantities = {}
+        for fill in fills:
+            direction = Decimal("1") if fill.side is OrderSide.BUY else Decimal("-1")
+            quantities[fill.instrument] = quantities.get(fill.instrument, Decimal("0")) + direction * fill.quantity
+        for instrument in set(quantities) | set(account.positions):
+            if quantities.get(instrument, Decimal("0")) != account.positions.get(instrument, Position(instrument)).quantity:
+                raise ValueError("LEDGER_RECONCILIATION_FAILED: fill-derived position mismatch")
+        market_value = sum((position.market_value for position in account.positions.values()), Decimal("0"))
+        if account.equity != account.base_cash.total + market_value:
+            raise ValueError("LEDGER_RECONCILIATION_FAILED: equity mismatch")
+        return {"cash": True, "positions": True, "equity": True}
