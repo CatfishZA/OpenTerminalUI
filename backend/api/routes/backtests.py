@@ -32,6 +32,10 @@ class BacktestSubmitPayload(BaseModel):
     strategy: str = "example:sma_crossover"
     context: dict[str, Any] | None = None
     config: dict[str, Any] | None = None
+    timeframe: str = "1d"
+    verification_level: str = "RESEARCH"
+    data_version_id: str | None = None
+    currency: str | None = None
 
 
 class ComparePayload(BaseModel):
@@ -132,19 +136,26 @@ async def list_strategies() -> list[dict[str, Any]]:
 @router.post("/backtests")
 async def submit_backtest(payload: BacktestSubmitPayload) -> dict[str, str]:
     service = get_backtest_job_service()
-    run_id = await service.submit(
-        BacktestJobRequest(
-            symbol=payload.symbol,
-            asset=payload.asset,
-            market=payload.market,
-            start=payload.start,
-            end=payload.end,
-            limit=payload.limit,
-            strategy=payload.strategy,
-            context=payload.context,
-            config=payload.config,
+    try:
+        run_id = await service.submit(
+            BacktestJobRequest(
+                symbol=payload.symbol,
+                asset=payload.asset,
+                market=payload.market,
+                start=payload.start,
+                end=payload.end,
+                limit=payload.limit,
+                timeframe=payload.timeframe,
+                strategy=payload.strategy,
+                context=payload.context,
+                config=payload.config,
+                verification_level=payload.verification_level,
+                data_version_id=payload.data_version_id,
+                currency=payload.currency,
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"run_id": run_id, "status": "queued"}
 
 

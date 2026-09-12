@@ -87,6 +87,21 @@ class SqlAlchemySimulationRunRepository:
         self.db.commit()
         return True
 
+    def link_legacy(self, run_id: str, legacy_run_id: str) -> None:
+        row = self.get(run_id)
+        if row is None:
+            raise LookupError(run_id)
+        row.legacy_backtest_run_id = legacy_run_id
+        self.db.commit()
+
+    def store_result(self, run_id: str, result: dict, result_hash: str) -> None:
+        row = self.get(run_id)
+        if row is None:
+            raise LookupError(run_id)
+        row.result_json = to_primitive(result)
+        row.result_hash = result_hash
+        self.db.commit()
+
 
 class SqlAlchemyEventStore:
     def __init__(self, db: Session):

@@ -33,6 +33,8 @@ class SimulationRunORM(Base):
     seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
     request_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     manifest_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    result_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

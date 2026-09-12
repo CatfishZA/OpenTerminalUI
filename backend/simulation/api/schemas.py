@@ -113,6 +113,7 @@ class SimulationResultResponse(StrictModel):
     status: str
     stage: str
     result: dict[str, Any] | None
+    error: str | None = None
 
 
 class CollectionResponse(StrictModel):

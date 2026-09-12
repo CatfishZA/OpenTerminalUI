@@ -101,7 +101,7 @@ class DailySimulator:
         def submit(intent: StrategyIntent, bar: MarketBar, eligible_at: datetime):
             nonlocal order_seq
             order_seq += 1
-            order = Order(f"ord_{order_seq:08d}", run_id, account.account_id, intent.instrument, intent.side,
+            order = Order(f"ord_{run_id[4:]}_{order_seq:08d}", run_id, account.account_id, intent.instrument, intent.side,
                 intent.order_type, intent.quantity, intent.quantity, intent.tif, intent.created_at,
                 limit_price=intent.limit_price, stop_price=intent.stop_price,
                 metadata={**intent.metadata, "daily_bar_path_policy": spec.execution_profile.get("daily_bar_path_policy", "WORST_CASE")})

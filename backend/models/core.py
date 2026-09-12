@@ -136,6 +136,9 @@ class BacktestRun(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     data_version_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("data_versions.id", ondelete="SET NULL"), nullable=True, index=True)
     execution_profile_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    simulation_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[str] = mapped_column(String(40), default=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: Mapped[str] = mapped_column(String(40), default=lambda: datetime.now(timezone.utc).isoformat())
 

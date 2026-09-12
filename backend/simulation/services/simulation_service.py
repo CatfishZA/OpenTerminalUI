@@ -18,6 +18,8 @@ from backend.simulation.persistence.repositories import SqlAlchemySimulationRunR
 from backend.simulation.services.manifest_service import ManifestService
 from backend.simulation.domain.enums import SimulationRunStatus
 from backend.simulation.domain.results import SimulationResult
+from backend.simulation.persistence.serializers import to_primitive
+from backend.models import DataVersionORM
 if TYPE_CHECKING:
     from backend.simulation.engine.daily_simulator import DailySimulator
 
@@ -41,7 +43,17 @@ class SimulationService:
     async def submit(self, spec: SimulationRunSpec) -> str:
         # Domain construction has already applied all Phase 1A request validation.
         run_id = f"sim_{uuid4().hex[:12]}"
-        manifest = self.manifest_service.build(run_id, spec)
+        dataset_hash = None
+        calendar_version = None
+        if spec.data_version_id:
+            version = self.db.get(DataVersionORM, spec.data_version_id)
+            if version is not None:
+                metadata = dict(version.metadata_json or {})
+                dataset_hash = metadata.get("dataset_hash")
+                calendar_version = metadata.get("calendar_version")
+        manifest = self.manifest_service.build(
+            run_id, spec, dataset_hash=dataset_hash, calendar_version=calendar_version
+        )
         self.run_repository.create(run_id, spec, manifest)
         return run_id
 
@@ -56,6 +68,7 @@ class SimulationService:
             self.run_repository.update_status(run_id, SimulationRunStatus.RUNNING)
             result = simulator.run(spec, run_id=run_id, manifest=manifest)
             self.run_repository.update_status(run_id, SimulationRunStatus.FINALIZING)
+            self.run_repository.store_result(run_id, to_primitive(result), result.result_hash)
             self.run_repository.update_status(run_id, SimulationRunStatus.DONE)
             return result
         except Exception as exc:
@@ -77,7 +90,14 @@ class SimulationService:
 
     async def result(self, run_id: str) -> dict:
         row = self._require(run_id)
-        return {"run_id": row.id, "status": row.status, "stage": "not_executed", "result": None}
+        status = SimulationRunStatus(row.status)
+        return {
+            "run_id": row.id,
+            "status": status.value,
+            "stage": "not_executed" if status is SimulationRunStatus.QUEUED else status.value.lower(),
+            "result": dict(row.result_json) if status is SimulationRunStatus.DONE and row.result_json else None,
+            "error": row.error or None,
+        }
 
     async def manifest(self, run_id: str) -> RunManifest:
         manifest = self.run_repository.get_manifest(run_id)

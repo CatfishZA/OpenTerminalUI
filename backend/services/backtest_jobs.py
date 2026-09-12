@@ -17,6 +17,16 @@ from backend.core.single_asset_backtest import BacktestEngine
 from backend.core.strategy_runner import StrategyRunner
 from backend.db.models import BacktestRun
 from backend.shared.ws_manager import ws_manager
+from backend.models import DataVersionORM
+from backend.simulation.adapters.backtest_request_adapter import (
+    BacktestRequestAdapter,
+    should_use_simulation_engine,
+)
+from backend.simulation.adapters.legacy_result_adapter import LegacyResultAdapter
+from backend.simulation.domain.enums import SimulationRunStatus
+from backend.simulation.persistence.repositories import SqlAlchemySimulationRunRepository
+from backend.simulation.services.simulation_service import SimulationService
+from backend.simulation.services.simulator_factory import build_daily_simulator
 
 
 @dataclass(frozen=True)
@@ -31,6 +41,9 @@ class BacktestJobRequest:
     strategy: str = "example:sma_crossover"
     context: dict | None = None
     config: dict | None = None
+    verification_level: str = "RESEARCH"
+    data_version_id: str | None = None
+    currency: str | None = None
 
 
 class BacktestJobService:
@@ -45,6 +58,10 @@ class BacktestJobService:
         self._worker_task = asyncio.create_task(self._worker(), name="backtest-jobs-worker")
 
     async def submit(self, req: BacktestJobRequest) -> str:
+        verification = str(req.verification_level).strip().upper()
+        if verification not in {"RESEARCH", "VERIFIED"}:
+            raise ValueError(f"UNSUPPORTED_VERIFIED_CONFIG: unknown verification_level {verification}")
+        spec = BacktestRequestAdapter().to_spec(req) if should_use_simulation_engine(req) else None
         run_id = f"bt_{uuid4().hex[:12]}"
         db = next(get_db())
         try:
@@ -55,7 +72,28 @@ class BacktestJobService:
             )
             db.add(row)
             db.commit()
+            if spec is not None:
+                if db.get(DataVersionORM, spec.data_version_id) is None:
+                    row.status = "failed"
+                    row.error = f"DATA_VERSION_NOT_FOUND: {spec.data_version_id}"
+                    db.commit()
+                    raise ValueError(row.error)
+                simulation_service = SimulationService(db)
+                simulation_run_id = await simulation_service.submit(spec)
+                row = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).one()
+                row.simulation_run_id = simulation_run_id
+                SqlAlchemySimulationRunRepository(db).link_legacy(simulation_run_id, run_id)
+                db.commit()
             await self._queue.put(run_id)
+        except Exception as exc:
+            db.rollback()
+            row = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
+            if row is not None and row.status != "failed":
+                row.status = "failed"
+                row.error = str(exc)
+                row.updated_at = datetime.now(timezone.utc).isoformat()
+                db.commit()
+            raise
         finally:
             db.close()
         await self.ensure_worker()
@@ -82,6 +120,9 @@ class BacktestJobService:
             await ws_manager.broadcast_to_all({"type": "backtest_progress", "run_id": run_id, "progress": 10, "status": "fetching data"})
 
             req = BacktestJobRequest(**json.loads(row.request_json))
+            if should_use_simulation_engine(req):
+                await self._execute_verified(db, row, req)
+                return
             service = get_historical_data_service()
             raw_symbol = (req.asset or req.symbol)
             if getattr(req, "timeframe", "1d") == "1d":
@@ -156,12 +197,52 @@ class BacktestJobService:
         except Exception as exc:
             row = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
             if row is not None:
+                if row.simulation_run_id:
+                    simulation_repository = SqlAlchemySimulationRunRepository(db)
+                    simulation = simulation_repository.get(row.simulation_run_id)
+                    if simulation is not None and simulation.status != SimulationRunStatus.FAILED.value:
+                        simulation_repository.update_status(
+                            row.simulation_run_id, SimulationRunStatus.FAILED, error=str(exc)
+                        )
                 row.status = "failed"
                 row.error = str(exc)
                 row.updated_at = datetime.now(timezone.utc).isoformat()
                 db.commit()
         finally:
             db.close()
+
+    async def _execute_verified(self, db, row: BacktestRun, req: BacktestJobRequest) -> None:  # noqa: ANN001
+        if not row.simulation_run_id:
+            raise ValueError("ENGINE_INVARIANT_FAILED: verified backtest is not linked to a simulation")
+        spec = BacktestRequestAdapter().to_spec(req)
+        await ws_manager.broadcast_to_all({
+            "type": "backtest_progress", "run_id": row.run_id,
+            "progress": 25, "status": "building manifest",
+        })
+        service = SimulationService(db)
+        simulator = build_daily_simulator(db, spec)
+        await ws_manager.broadcast_to_all({
+            "type": "backtest_progress", "run_id": row.run_id,
+            "progress": 60, "status": "running deterministic simulation",
+        })
+        result = await service.execute(row.simulation_run_id, spec, simulator)
+        bars = tuple(simulator.d.market_data.iter_daily_events(list(spec.universe), spec.start, spec.end))
+        adapted = LegacyResultAdapter().adapt(
+            result,
+            symbol=spec.universe[0].symbol,
+            asset=req.asset or req.symbol,
+            bars=bars,
+        )
+        row.result_json = json.dumps(adapted, separators=(",", ":"))
+        row.status = "done"
+        row.error = ""
+        row.logs = "Verified deterministic simulation completed."
+        row.updated_at = datetime.now(timezone.utc).isoformat()
+        db.commit()
+        await ws_manager.broadcast_to_all({
+            "type": "backtest_progress", "run_id": row.run_id,
+            "progress": 100, "status": "done",
+        })
 
     def _fetch_with_market_fallback(
         self,
