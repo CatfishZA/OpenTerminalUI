@@ -68,6 +68,16 @@ from backend.saved_views.models import SavedViewORM
 from backend.models.user import RefreshToken, User, UserRole
 from backend.models.journal import JournalEntry
 from backend.models.notification import Notification
+from backend.simulation.persistence.models import (
+    SimulationAppliedCorporateActionORM,
+    SimulationEventORM,
+    SimulationFillORM,
+    SimulationLedgerEntryORM,
+    SimulationOrderORM,
+    SimulationPortfolioSnapshotORM,
+    SimulationPositionSnapshotORM,
+    SimulationRunORM,
+)
 
 __all__ = [
     "Holding",
@@ -139,4 +149,12 @@ __all__ = [
     "ExperimentArtifact",
     "InstrumentMaster",
     "JournalEntry",
+    "SimulationRunORM",
+    "SimulationEventORM",
+    "SimulationOrderORM",
+    "SimulationFillORM",
+    "SimulationLedgerEntryORM",
+    "SimulationPositionSnapshotORM",
+    "SimulationPortfolioSnapshotORM",
+    "SimulationAppliedCorporateActionORM",
 ]

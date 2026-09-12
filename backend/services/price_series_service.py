@@ -31,6 +31,7 @@ async def get_price_series(
     start: str | None = None,
     end: str | None = None,
     data_version_id: str | None = None,
+    strict_persisted: bool = False,
 ) -> tuple[str, list[PricePoint]]:
     version = get_active_data_version(db) if not data_version_id else None
     resolved_version_id = data_version_id or (version.id if version else "")
@@ -47,6 +48,9 @@ async def get_price_series(
             PricePoint(date=r.trade_date, open=float(r.open), high=float(r.high), low=float(r.low), close=float(r.close), volume=float(r.volume))
             for r in rows
         ]
+    elif strict_persisted:
+        # VERIFIED simulation must never fill gaps from a provider during a run.
+        return resolved_version_id, []
     else:
         raw = await fetcher.fetch_history(symbol, range_str="5y", interval="1d")
         frame = _parse_yahoo_chart(raw if isinstance(raw, dict) else {})
