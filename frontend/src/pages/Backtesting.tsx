@@ -6,13 +6,16 @@ import type { Bar } from "oakscriptjs";
 import type { Trade } from "../types/backtesting";
 import {
   explainBacktest,
+  extractApiErrorMessage,
   fetchActiveDataVersion,
+  fetchDataVersions,
   fetchBacktestJobResult,
   fetchBacktestJobStatus,
   searchSymbols,
   submitBacktestJob,
   type SearchSymbolItem,
   type BacktestJobResult,
+  type DataVersionInfo,
 } from "../api/client";
 import { AiInsightCard } from "../components/terminal/AiInsightCard";
 import {
@@ -49,6 +52,10 @@ import { consumePendingSavedView } from "../workspace/savedViewRestore";
 
 import { RobustnessPanel, type RobustnessData } from "../components/backtesting/panels/RobustnessPanel";
 import { SweepPanel } from "../components/backtesting/panels/SweepPanel";
+import { ExecutionArtifactsPanel } from "../components/backtesting/ExecutionArtifactsPanel";
+import { RunProvenancePanel } from "../components/backtesting/RunProvenancePanel";
+import { VerificationModeControl, type VerificationMode } from "../components/backtesting/VerificationModeControl";
+import { buildBacktestSubmitPayload, explainVerifiedError } from "../components/backtesting/verifiedWorkflow";
 
 type JobState = "idle" | "queued" | "running" | "done" | "failed";
 type BacktestTimeframe = "1D" | "1W" | "1M";
@@ -415,6 +422,8 @@ export function BacktestingPage() {
   const [robustnessLoading, setRobustnessLoading] = useState(false);
   const [chartType, setChartType] = useState<ChartKind>("candle");
   const [dataTimeframe, setDataTimeframe] = useState<"1m" | "5m" | "15m" | "1h" | "1d">("1d");
+  const [verificationMode, setVerificationMode] = useState<VerificationMode>("RESEARCH");
+  const [verifiedQuantity, setVerifiedQuantity] = useState(1);
   const [timeframe, setTimeframe] = useState<BacktestTimeframe>("1D");
   const [showVolume, setShowVolume] = useState(true);
   const [showMarkers, setShowMarkers] = useState(true);
@@ -430,6 +439,9 @@ export function BacktestingPage() {
     if (typeof filters.asset === "string") setAsset(filters.asset);
     if (filters.market === "NSE" || filters.market === "BSE" || filters.market === "NYSE" || filters.market === "NASDAQ" || filters.market === "AMEX") setMarket(filters.market);
     if (filters.dataTimeframe === "1m" || filters.dataTimeframe === "5m" || filters.dataTimeframe === "15m" || filters.dataTimeframe === "1h" || filters.dataTimeframe === "1d") setDataTimeframe(filters.dataTimeframe);
+    if (filters.verificationMode === "RESEARCH" || filters.verificationMode === "VERIFIED") setVerificationMode(filters.verificationMode);
+    if (typeof filters.dataVersionId === "string") setDataVersionId(filters.dataVersionId);
+    if (typeof filters.verifiedQuantity === "number" && filters.verifiedQuantity > 0) setVerifiedQuantity(filters.verifiedQuantity);
     if (typeof filters.start === "string") setStart(filters.start);
     if (typeof filters.end === "string") setEnd(filters.end);
     if (typeof filters.strategyMode === "string") setStrategyMode(filters.strategyMode);
@@ -442,6 +454,9 @@ export function BacktestingPage() {
   const [walkForwardWindows, setWalkForwardWindows] = useState<WalkForwardWindow[]>([]);
   const [sensitivityRows, setSensitivityRows] = useState<SensitivityRow[]>([]);
   const [dataVersionId, setDataVersionId] = useState<string>("");
+  const [dataVersions, setDataVersions] = useState<DataVersionInfo[]>([]);
+  const [dataVersionsLoading, setDataVersionsLoading] = useState(true);
+  const [dataVersionsError, setDataVersionsError] = useState<string | null>(null);
   const [adjustedSeries, setAdjustedSeries] = useState(true);
   const [executionProfile, setExecutionProfile] = useState({
     commission_bps: 5,
@@ -465,13 +480,30 @@ export function BacktestingPage() {
   useEffect(() => {
     void (async () => {
       try {
-        const version = await fetchActiveDataVersion();
-        setDataVersionId(version.id);
-      } catch {
+        const active = await fetchActiveDataVersion();
+        let versions: DataVersionInfo[] = [];
+        try {
+          versions = await fetchDataVersions();
+        } catch {
+          // The list endpoint is additive; the existing active version remains a valid fallback.
+        }
+        setDataVersions(versions.length ? versions : [active]);
+        setDataVersionId((current) => current || active.id);
+        setDataVersionsError(null);
+      } catch (loadError) {
         setDataVersionId("");
+        setDataVersions([]);
+        setDataVersionsError(extractApiErrorMessage(loadError, "Unable to load persisted data versions."));
+      } finally {
+        setDataVersionsLoading(false);
       }
     })();
   }, []);
+
+  const changeVerificationMode = (mode: VerificationMode) => {
+    setVerificationMode(mode);
+    if (mode === "VERIFIED") setDataTimeframe("1d");
+  };
 
   useEffect(() => {
     const q = asset.trim().toUpperCase();
@@ -530,8 +562,10 @@ export function BacktestingPage() {
     if (!Number.isFinite(tradeCapital) || tradeCapital <= 0) return false;
     if (start && end && start > end) return false;
     if (strategyMode === CUSTOM_STRATEGY_VALUE && !script.trim()) return false;
+    if (verificationMode === "VERIFIED" && (!start || !end || dataTimeframe !== "1d" || !dataVersionId)) return false;
+    if (verificationMode === "VERIFIED" && (!Number.isFinite(verifiedQuantity) || verifiedQuantity <= 0)) return false;
     return !submitInFlight && jobState !== "queued" && jobState !== "running";
-  }, [asset, end, jobState, script, start, strategyMode, submitInFlight, tradeCapital]);
+  }, [asset, dataTimeframe, dataVersionId, end, jobState, script, start, strategyMode, submitInFlight, tradeCapital, verificationMode, verifiedQuantity]);
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -541,40 +575,18 @@ export function BacktestingPage() {
     setRobustness(null);
     const strategy = strategyMode === CUSTOM_STRATEGY_VALUE ? script : `example:${strategyMode}`;
     const context = strategyMode === CUSTOM_STRATEGY_VALUE ? {} : (activePreset?.default_context ?? {});
-    const sanitize = (value: unknown, fallback = 0): number => {
-      const numeric = Number(value);
-      return Number.isFinite(numeric) ? numeric : fallback;
-    };
     setSubmitInFlight(true);
     try {
-      const res = await submitBacktestJob({
-        symbol,
-        asset: symbol,
-        market,
-        start,
-        end,
-        timeframe: dataTimeframe,
-        strategy,
-        context,
-        config: {
-          initial_cash: sanitize(tradeCapital, 100000),
-          position_fraction: modelAllocation,
-          data_version_id: dataVersionId || undefined,
-          adjusted: adjustedSeries,
-          execution_profile: {
-            commission_bps: sanitize(executionProfile.commission_bps, 0),
-            slippage_model: executionProfile.slippage_model,
-            slippage_bps: sanitize(executionProfile.slippage_bps, 0),
-            spread_bps: sanitize(executionProfile.spread_bps, 0),
-            market_impact_bps: sanitize(executionProfile.market_impact_bps, 0),
-            volume_cap_pct: sanitize(executionProfile.volume_cap_pct, 10),
-          },
-        },
-      });
+      const res = await submitBacktestJob(buildBacktestSubmitPayload({
+        mode: verificationMode, symbol, market, start, end, dataTimeframe, strategy,
+        strategyContext: context, tradeCapital, modelAllocation, dataVersionId,
+        currency: currencyCode, verifiedQuantity, adjustedSeries, executionProfile,
+      }));
       setRunId(res.run_id || res.job_id);
       setJobState("queued");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to submit backtest");
+      const message = extractApiErrorMessage(e, "Failed to submit backtest");
+      setError(verificationMode === "VERIFIED" ? explainVerifiedError(message) : message);
       setJobState("failed");
     } finally {
       setSubmitInFlight(false);
@@ -594,7 +606,7 @@ export function BacktestingPage() {
             if (!active) return;
             setResult(payload);
             setJobState(payload.status === "done" ? "done" : "failed");
-            if (payload.status === "failed") setError(payload.error || "Backtest failed");
+            if (payload.status === "failed") setError(verificationMode === "VERIFIED" ? explainVerifiedError(payload.error || "Backtest failed") : (payload.error || "Backtest failed"));
             window.clearInterval(timer);
           } else {
             setJobState(status.status === "running" ? "running" : "queued");
@@ -608,7 +620,7 @@ export function BacktestingPage() {
       })();
     }, 1500);
     return () => { active = false; window.clearInterval(timer); };
-  }, [jobState, runId]);
+  }, [jobState, runId, verificationMode]);
 
   const fetchAnalytics = useCallback(async () => {
     if (!runId || jobState !== "done") return;
@@ -1567,7 +1579,7 @@ export function BacktestingPage() {
           <SavedViewsControl
             pageLabel="Backtesting"
             capture={() => ({
-              filters: { asset, market, dataTimeframe, start, end, strategyMode },
+              filters: { asset, market, dataTimeframe, start, end, strategyMode, verificationMode, dataVersionId, verifiedQuantity },
               activeTabs: { activeTab },
               chartLayout: { activeTab },
               selectedTicker: asset,
@@ -1586,20 +1598,24 @@ export function BacktestingPage() {
       </TerminalPanel>
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_320px]">
         <TerminalPanel title="Backtesting Control Deck" subtitle="Compact controls for chart-first workflow">
+          <VerificationModeControl value={verificationMode} onChange={changeVerificationMode} />
           <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-8">
             <label className="md:col-span-1"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Asset (Ticker)</span><div className="relative"><input className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs uppercase" value={asset} onChange={(e) => { const raw = e.target.value.toUpperCase().trim(); const prefixed = raw.match(/^(NSE|BSE|NYSE|NASDAQ|AMEX):([A-Z0-9._-]+)$/); if (prefixed) { const ex = prefixed[1] as BacktestMarket; setMarket(ex); setAsset(prefixed[2]); } else { if (raw.endsWith(".NS")) setMarket("NSE"); if (raw.endsWith(".BO")) setMarket("BSE"); setAsset(raw); } setShowAssetSuggestions(true); }} onFocus={() => setShowAssetSuggestions(true)} onBlur={() => window.setTimeout(() => setShowAssetSuggestions(false), 150)} />{showAssetSuggestions && assetSuggestions.length > 0 && <div className="absolute left-0 right-0 top-[calc(100%+2px)] z-20 max-h-48 overflow-auto rounded border border-terminal-border bg-terminal-panel shadow-lg">{assetSuggestions.map((item) => (<button key={`${item.ticker}:${item.name}`} type="button" className="flex w-full items-center justify-between border-b border-terminal-border/40 px-2 py-1 text-left text-xs hover:bg-terminal-bg" onMouseDown={(e) => e.preventDefault()} onClick={() => { setAsset((item.ticker || "").toUpperCase()); const ex = (item.exchange || "").toUpperCase(); if (KNOWN_MARKETS.includes(ex as BacktestMarket)) setMarket(ex as BacktestMarket); setShowAssetSuggestions(false); }}><span>{item.ticker}</span><span className="ml-2 truncate text-[10px] text-terminal-muted">{item.name}</span></button>))}</div>}</div></label>
             <label className="md:col-span-1"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Market</span><select className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs uppercase" value={market} onChange={(e) => setMarket(e.target.value as BacktestMarket)}><option value="NSE">NSE</option><option value="BSE">BSE</option><option value="NYSE">NYSE</option><option value="NASDAQ">NASDAQ</option><option value="AMEX">AMEX</option></select></label>
-            <label className="md:col-span-1"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Data TF</span><select className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={dataTimeframe} onChange={(e) => setDataTimeframe(e.target.value as "1m" | "5m" | "15m" | "1h" | "1d")}><option value="1d">Daily</option><option value="1h">1 Hour</option><option value="15m">15 Min</option><option value="5m">5 Min</option><option value="1m">1 Min</option></select></label>
+            <label className="md:col-span-1"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Data TF</span><select aria-label="Data timeframe" className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={dataTimeframe} onChange={(e) => setDataTimeframe(e.target.value as "1m" | "5m" | "15m" | "1h" | "1d")}><option value="1d">Daily</option><option value="1h" disabled={verificationMode === "VERIFIED"}>1 Hour</option><option value="15m" disabled={verificationMode === "VERIFIED"}>15 Min</option><option value="5m" disabled={verificationMode === "VERIFIED"}>5 Min</option><option value="1m" disabled={verificationMode === "VERIFIED"}>1 Min</option></select></label>
             <label className="md:col-span-1"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Start</span><input type="date" className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={start} onChange={(e) => setStart(e.target.value)} min={dataTimeframe !== "1d" ? new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : undefined} /></label>
             <label className="md:col-span-1"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">End</span><input type="date" className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={end} onChange={(e) => setEnd(e.target.value)} /></label>
             <label className="md:col-span-2"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Model</span><select className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={strategyMode} onChange={(e) => setStrategyMode(e.target.value)}>{STRATEGY_CATALOG.map((opt) => <option key={opt.key} value={opt.key}>[{opt.category.toUpperCase()}] {opt.label}</option>)}<option value={CUSTOM_STRATEGY_VALUE}>Custom Python Script</option></select></label>
             <label className="md:col-span-1"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Trade Capital</span><input type="number" min={1} step={100} className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={tradeCapital} onChange={(e) => setTradeCapital(Number.isFinite(e.target.valueAsNumber) ? e.target.valueAsNumber : 0)} /></label>
           </div>
-          {dataTimeframe !== "1d" && <div className="mt-2 text-[10px] text-terminal-warning">Intraday data is heavy. Start date is limited to the last 6 months. Fetching may take longer.</div>}
+          {verificationMode === "VERIFIED" ? <div className="mt-2 text-[10px] text-terminal-warning">Verified execution currently supports daily bars only.</div> : dataTimeframe !== "1d" ? <div className="mt-2 text-[10px] text-terminal-warning">Intraday data is heavy. Start date is limited to the last 6 months. Fetching may take longer.</div> : null}
           <div className="mt-2 grid grid-cols-1 gap-2 text-xs md:grid-cols-7">
             <label className="md:col-span-2">
-              <span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Data Version ID</span>
-              <input className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={dataVersionId} onChange={(e) => setDataVersionId(e.target.value)} />
+              <span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Data Version{verificationMode === "VERIFIED" ? " (required)" : ""}</span>
+              <select aria-label="Data version" className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={dataVersionId} onChange={(e) => setDataVersionId(e.target.value)} disabled={dataVersionsLoading}>
+                <option value="">{dataVersionsLoading ? "Loading versions…" : "No data version selected"}</option>
+                {dataVersions.map((version) => <option key={version.id} value={version.id}>{version.name}{version.source ? ` · ${version.source}` : ""}{version.is_active ? " (active)" : ""}</option>)}
+              </select>
             </label>
             <label className="md:col-span-1">
               <span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Series</span>
@@ -1608,19 +1624,24 @@ export function BacktestingPage() {
                 <option value="raw">Unadjusted</option>
               </select>
             </label>
+            {verificationMode === "VERIFIED" && <label className="md:col-span-1"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Order Quantity</span><input aria-label="Order Quantity" type="number" min={0.00000001} step="any" className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={verifiedQuantity} onChange={(e) => setVerifiedQuantity(e.target.valueAsNumber)} /></label>}
+            {verificationMode === "VERIFIED" && <div className="self-end rounded border border-terminal-border/60 px-2 py-1 text-[10px] text-terminal-muted">Currency: {currencyCode}</div>}
           </div>
+          {verificationMode === "VERIFIED" && !dataVersionsLoading && !dataVersionId && <div className="mt-2 text-[10px] text-terminal-neg">A persisted data version is required for VERIFIED execution.</div>}
+          {dataVersionsError && <div className="mt-2 text-[10px] text-terminal-neg">{dataVersionsError}</div>}
+          {verificationMode === "VERIFIED" && (!start || !end) && <div className="mt-2 text-[10px] text-terminal-neg">Start and end dates are required for VERIFIED execution.</div>}
           <div className="mt-2 rounded border border-terminal-border/60 bg-terminal-bg/60 p-2">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-wide text-terminal-accent">Execution Profile</div>
-                <div className="text-[10px] text-terminal-muted">Slippage, spread, market impact, and market-volume participation cap.</div>
+                <div className="text-[10px] text-terminal-muted">{verificationMode === "VERIFIED" ? "Deterministic fixed-BPS costs with WORST_CASE daily-bar handling and T+1 settlement." : "Slippage, spread, market impact, and market-volume participation cap."}</div>
               </div>
               <span className="rounded border border-terminal-border px-2 py-0.5 text-[10px] uppercase text-terminal-muted">{market}</span>
             </div>
             <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-6">
               <label>
                 <span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Slippage Model</span>
-                <select className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={executionProfile.slippage_model} onChange={(e) => setExecutionProfile((s) => ({ ...s, slippage_model: e.target.value as ExecutionSlippageModel }))}>
+                <select className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={verificationMode === "VERIFIED" ? "fixed_bps" : executionProfile.slippage_model} disabled={verificationMode === "VERIFIED"} onChange={(e) => setExecutionProfile((s) => ({ ...s, slippage_model: e.target.value as ExecutionSlippageModel }))}>
                   <option value="fixed_bps">Fixed BPS</option>
                   <option value="volume_weighted">Volume-weighted</option>
                   <option value="impact_curve">Impact curve</option>
@@ -1634,27 +1655,43 @@ export function BacktestingPage() {
                 <span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Slip bps</span>
                 <input type="number" min={0} step={0.25} className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={executionProfile.slippage_bps} onChange={(e) => setExecutionProfile((s) => ({ ...s, slippage_bps: Number(e.target.value) }))} />
               </label>
-              <label>
+              {verificationMode === "RESEARCH" && <label>
                 <span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Spread bps</span>
                 <input type="number" min={0} step={0.25} className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={executionProfile.spread_bps} onChange={(e) => setExecutionProfile((s) => ({ ...s, spread_bps: Number(e.target.value) }))} />
-              </label>
-              <label>
+              </label>}
+              {verificationMode === "RESEARCH" && <label>
                 <span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Impact bps</span>
                 <input type="number" min={0} step={0.25} className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={executionProfile.market_impact_bps} onChange={(e) => setExecutionProfile((s) => ({ ...s, market_impact_bps: Number(e.target.value) }))} />
-              </label>
-              <label>
+              </label>}
+              {verificationMode === "RESEARCH" && <label>
                 <span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">% Volume Cap</span>
                 <input type="number" min={0.1} max={100} step={0.5} className="w-full rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-xs" value={executionProfile.volume_cap_pct} onChange={(e) => setExecutionProfile((s) => ({ ...s, volume_cap_pct: Number(e.target.value) }))} />
-              </label>
+              </label>}
+              {verificationMode === "VERIFIED" && <div className="rounded border border-terminal-border/60 px-2 py-1"><span className="block text-[10px] uppercase text-terminal-muted">Daily Path</span><span>WORST_CASE</span></div>}
+              {verificationMode === "VERIFIED" && <div className="rounded border border-terminal-border/60 px-2 py-1"><span className="block text-[10px] uppercase text-terminal-muted">Settlement</span><span>T+1</span></div>}
             </div>
           </div>
           {strategyMode !== CUSTOM_STRATEGY_VALUE && activePreset && <div className="mt-2"><span className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase" style={{ backgroundColor: `${CATEGORY_COLORS[activePreset.category] ?? terminalColors.accent}22`, color: CATEGORY_COLORS[activePreset.category] ?? terminalColors.accent, border: `1px solid ${CATEGORY_COLORS[activePreset.category] ?? terminalColors.accent}44` }}>{activePreset.category}</span></div>}
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px]"><div className="rounded border border-terminal-border/60 bg-terminal-bg px-2 py-1 text-terminal-muted">{strategyMode === CUSTOM_STRATEGY_VALUE ? "Custom script mode: define generate_signals(df, context)." : activePreset?.description}</div><div className="rounded border border-terminal-border/60 bg-terminal-bg px-2 py-1 text-terminal-muted">Model allocation: {(modelAllocation * 100).toFixed(0)}%</div><div className="flex items-center gap-2"><span className="text-terminal-muted">Run ID: {runId || "-"}</span><span className="text-terminal-muted">Status: {jobState.toUpperCase()}</span><button type="button" className="rounded border border-terminal-accent bg-terminal-accent/15 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-terminal-accent disabled:opacity-50" onClick={() => void submit()} disabled={!canSubmit}>{submitInFlight ? "Submitting..." : (jobState === "queued" || jobState === "running" ? "Running..." : "Run")}</button></div></div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px]"><div className="rounded border border-terminal-border/60 bg-terminal-bg px-2 py-1 text-terminal-muted">{strategyMode === CUSTOM_STRATEGY_VALUE ? "Custom script mode: define generate_signals(df, context)." : activePreset?.description}</div><div className="rounded border border-terminal-border/60 bg-terminal-bg px-2 py-1 text-terminal-muted">{verificationMode === "VERIFIED" ? `Order quantity: ${verifiedQuantity || "—"}` : `Model allocation: ${(modelAllocation * 100).toFixed(0)}%`}</div><div className="flex items-center gap-2"><span className={`rounded border px-2 py-0.5 font-semibold ${verificationMode === "VERIFIED" ? "border-terminal-pos text-terminal-pos" : "border-terminal-warning text-terminal-warning"}`}>{verificationMode}</span><span className="text-terminal-muted">Run ID: {runId || "-"}</span><span aria-live="polite" className="text-terminal-muted">Status: {jobState.toUpperCase()}</span><button type="button" className="rounded border border-terminal-accent bg-terminal-accent/15 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-terminal-accent disabled:opacity-50" onClick={() => void submit()} disabled={!canSubmit}>{submitInFlight ? "Submitting..." : (jobState === "queued" || jobState === "running" ? "Running..." : "Run")}</button></div></div>
           {strategyMode === CUSTOM_STRATEGY_VALUE && <label className="mt-2 block"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Python Strategy Script</span><textarea className="h-36 w-full resize-none rounded border border-terminal-border bg-terminal-bg px-2 py-1 font-mono text-[11px] text-terminal-text" value={script} onChange={(e) => setScript(e.target.value)} /></label>}
           {error && <div className="mt-2 rounded border border-terminal-neg bg-terminal-neg/10 p-2 text-xs text-terminal-neg">{error}</div>}
         </TerminalPanel>
         <TerminalPanel title="Backtest Performance" subtitle="Model result summary"><div className="space-y-2"><div className={`text-5xl font-bold tracking-tight ${returnClass}`}>{result?.result ? fmtPct(result.result.total_return) : "-"}</div><div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-terminal-text"><div className="text-terminal-muted">Initial Capital</div><div>{fmtMoney(initialCapital)}</div><div className="text-terminal-muted">Final Equity</div><div>{fmtMoney(finalEquity)}</div><div className="text-terminal-muted">Net P/L</div><div className={pnlAmount >= 0 ? "text-terminal-pos" : "text-terminal-neg"}>{fmtMoney(pnlAmount)}</div><div className="text-terminal-muted">Cash Left</div><div>{fmtMoney(endingCash)}</div><div className="text-terminal-muted">Sharpe</div><div>{result?.result ? result.result.sharpe.toFixed(2) : "-"}</div><div className="text-terminal-muted">Max Drawdown</div><div>{result?.result ? fmtPct(result.result.max_drawdown) : "-"}</div><div className="text-terminal-muted">Trades</div><div>{trades.length}</div><div className="text-terminal-muted">Total Qty</div><div>{totalTradeQty.toFixed(2)}</div></div><div className="border-t border-terminal-border/40 pt-2"><div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-terminal-text"><div className="text-terminal-muted">Win Rate</div><div>{(Number(analyticsSummary.win_rate) || 0).toFixed(2)}%</div><div className="text-terminal-muted">Profit Factor</div><div>{(Number(analyticsSummary.profit_factor) || 0).toFixed(2)}</div><div className="text-terminal-muted">Expectancy</div><div>{fmtMoney(Number(analyticsSummary.expectancy) || 0)}</div>{result?.result && (result.result.max_intraday_drawdown ?? 0) < 0 && (<><div className="text-terminal-muted">Max Intraday DD</div><div>{fmtPct(result.result.max_intraday_drawdown ?? 0)}</div><div className="text-terminal-muted">Avg Hold (Min)</div><div>{(result.result.average_hold_time_minutes || 0).toFixed(1)}m</div><div className="text-terminal-muted">Trades / Day</div><div>{(result.result.trades_per_day || 0).toFixed(1)}</div><div className="text-terminal-muted">Win Rate (AM/PM)</div><div>{(result.result.win_rate_morning || 0).toFixed(1)}% / {(result.result.win_rate_afternoon || 0).toFixed(1)}%</div></>)}</div></div></div></TerminalPanel>
       </div>
+
+      {result?.result && runId ? (
+        <RunProvenancePanel
+          legacyRunId={runId}
+          result={result.result}
+          currency={currencyCode}
+          commissionBps={executionProfile.commission_bps}
+          slippageBps={executionProfile.slippage_bps}
+        />
+      ) : null}
+
+      {jobState === "done" && result?.result?.verification_level === "VERIFIED" && result.result.simulation_run_id ? (
+        <ExecutionArtifactsPanel simulationRunId={result.result.simulation_run_id} />
+      ) : null}
 
       {result?.result && (
         <AiInsightCard

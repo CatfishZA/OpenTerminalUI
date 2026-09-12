@@ -41,6 +41,7 @@ export * from "./shadowAccount";
 export * from "./screenerAlerts";
 export * from "./chartWorkstation";
 export * from "./dataQuality";
+export * from "./simulation";
 // audit events intentionally not barrelled out to avoid
 // conflicting with AuditEvent type exported from types.ts → types/index.ts
 // Import directly from auditEvents.ts when needed.

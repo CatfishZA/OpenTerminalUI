@@ -12,7 +12,7 @@ from backend.api.deps import get_db, get_unified_fetcher
 from backend.api.routes.data_layer import router as data_layer_router
 from backend.auth.deps import get_current_user
 from backend.shared.db import Base
-from backend.models import CorpActionORM
+from backend.models import CorpActionORM, DataVersionORM
 
 
 def _chart_payload(days: int = 8) -> dict:
@@ -105,3 +105,43 @@ def test_data_version_and_adjusted_prices() -> None:
     adj_first = adj_res.json()["items"][0]["close"]
     assert raw_first == 100.0
     assert adj_first == 50.0
+
+
+def test_data_version_list_is_read_only_and_active_first() -> None:
+    client, SessionLocal = _build_app()
+    db = SessionLocal()
+    try:
+        older = DataVersionORM(
+            id="version-older", name="Older", description="", source="import",
+            is_active=False, created_at=datetime(2024, 1, 1, tzinfo=timezone.utc), metadata_json={},
+        )
+        active = DataVersionORM(
+            id="version-active", name="Active", description="", source="internal",
+            is_active=True, created_at=datetime(2023, 1, 1, tzinfo=timezone.utc), metadata_json={"frozen": True},
+        )
+        newer = DataVersionORM(
+            id="version-newer", name="Newer", description="", source="vendor",
+            is_active=False, created_at=datetime(2025, 1, 1, tzinfo=timezone.utc), metadata_json={},
+        )
+        db.add_all([older, active, newer])
+        db.commit()
+        before = db.query(DataVersionORM).count()
+    finally:
+        db.close()
+
+    response = client.get("/api/data/versions")
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [
+        "version-active", "version-newer", "version-older",
+    ]
+    assert response.json()["items"][0]["metadata"] == {"frozen": True}
+
+    db = SessionLocal()
+    try:
+        assert db.query(DataVersionORM).count() == before
+    finally:
+        db.close()
+
+    active_response = client.get("/api/data/version/active")
+    assert active_response.status_code == 200
+    assert active_response.json()["id"] == "version-active"

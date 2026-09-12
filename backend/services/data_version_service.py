@@ -8,6 +8,16 @@ from sqlalchemy.orm import Session
 from backend.models import DataVersionORM
 
 
+def list_data_versions(db: Session, limit: int = 100) -> list[DataVersionORM]:
+    """Return persisted versions with the active snapshot first, then newest first."""
+    return (
+        db.query(DataVersionORM)
+        .order_by(DataVersionORM.is_active.desc(), DataVersionORM.created_at.desc(), DataVersionORM.id.asc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+
+
 def get_active_data_version(db: Session) -> DataVersionORM:
     row = (
         db.query(DataVersionORM)

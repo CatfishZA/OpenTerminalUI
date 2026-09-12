@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from backend.api.deps import get_db, get_unified_fetcher
 from backend.auth.deps import get_current_user
 from backend.models import User
-from backend.services.data_version_service import create_data_version, get_active_data_version
+from backend.services.data_version_service import create_data_version, get_active_data_version, list_data_versions
 from backend.services.pit_fundamentals_service import (
     fetch_and_store_pit_fundamentals,
     get_fundamentals as get_pit_fundamentals,
@@ -30,12 +30,7 @@ class DataVersionCreateRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-@router.get("/data/version/active")
-def data_version_active(
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    row = get_active_data_version(db)
+def _serialize_data_version(row) -> dict[str, Any]:  # noqa: ANN001
     return {
         "id": row.id,
         "name": row.name,
@@ -45,6 +40,25 @@ def data_version_active(
         "created_at": row.created_at.isoformat(),
         "metadata": row.metadata_json if isinstance(row.metadata_json, dict) else {},
     }
+
+
+@router.get("/data/versions")
+def data_versions_list(
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    rows = list_data_versions(db, limit=limit)
+    return {"items": [_serialize_data_version(row) for row in rows]}
+
+
+@router.get("/data/version/active")
+def data_version_active(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = get_active_data_version(db)
+    return _serialize_data_version(row)
 
 
 @router.post("/data/version")
@@ -61,15 +75,7 @@ def data_version_create(
         activate=payload.activate,
         metadata=payload.metadata,
     )
-    return {
-        "id": row.id,
-        "name": row.name,
-        "description": row.description,
-        "source": row.source,
-        "is_active": row.is_active,
-        "created_at": row.created_at.isoformat(),
-        "metadata": row.metadata_json if isinstance(row.metadata_json, dict) else {},
-    }
+    return _serialize_data_version(row)
 
 
 @router.get("/prices/{symbol}")

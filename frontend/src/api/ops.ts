@@ -7,6 +7,16 @@ import type {
   OpsDataQualityReport,
 } from "./types";
 
+export type DataVersionInfo = {
+  id: string;
+  name: string;
+  description?: string;
+  source?: string;
+  is_active: boolean;
+  created_at?: string;
+  metadata?: Record<string, unknown>;
+};
+
 export async function fetchFeedHealth(): Promise<Record<string, unknown>> {
   const { data } = await api.get<Record<string, unknown>>("/ops/feed-health");
   return data;
@@ -30,6 +40,11 @@ export async function fetchOpsDataQuality(): Promise<OpsDataQualityReport> {
 export async function fetchActiveDataVersion(): Promise<DataVersion> {
   const { data } = await api.get<DataVersion>("/data/version/active");
   return data;
+}
+
+export async function fetchDataVersions(): Promise<DataVersionInfo[]> {
+  const { data } = await api.get<{ items?: DataVersionInfo[] }>("/data/versions");
+  return Array.isArray(data?.items) ? data.items : [];
 }
 
 export async function createDataVersion(payload: {

@@ -646,6 +646,111 @@ export type BacktestJobSubmitPayload = {
   strategy?: string;
   context?: Record<string, unknown>;
   config?: Record<string, unknown>;
+  verification_level?: "RESEARCH" | "VERIFIED";
+  data_version_id?: string;
+  currency?: string;
+};
+
+export type SimulationOrder = {
+  id: string;
+  run_id: string;
+  instrument_key: string;
+  side: string;
+  order_type: string;
+  quantity: string | number;
+  remaining_quantity: string | number;
+  tif: string;
+  status: string;
+  submitted_at: string;
+  accepted_at?: string | null;
+  completed_at?: string | null;
+  limit_price?: string | number | null;
+  stop_price?: string | number | null;
+};
+
+export type SimulationFill = {
+  id: string;
+  run_id: string;
+  order_id: string;
+  instrument_key: string;
+  side: string;
+  quantity: string | number;
+  price: string | number;
+  commission: string | number;
+  fees: string | number;
+  slippage_bps: string | number;
+  execution_model: string;
+  executed_at: string;
+};
+
+export type SimulationLedgerEntry = {
+  id: string;
+  run_id: string;
+  event_time: string;
+  entry_type: string;
+  currency: string;
+  amount: string | number;
+  instrument_key?: string | null;
+  order_id?: string | null;
+  fill_id?: string | null;
+};
+
+export type SimulationEvent = {
+  id: number;
+  run_id: string;
+  sequence: number;
+  event_id: string;
+  event_type: string;
+  event_time: string;
+  instrument_key?: string | null;
+  order_id?: string | null;
+  fill_id?: string | null;
+  payload_json?: Record<string, unknown>;
+};
+
+export type SimulationPortfolioSnapshot = {
+  id: number;
+  run_id: string;
+  snapshot_time: string;
+  cash_settled: string | number;
+  cash_unsettled: string | number;
+  cash_reserved: string | number;
+  market_value: string | number;
+  equity: string | number;
+  buying_power: string | number;
+};
+
+export type SimulationPositionSnapshot = {
+  id: number;
+  run_id: string;
+  snapshot_time: string;
+  instrument_key: string;
+  quantity: string | number;
+  average_cost: string | number;
+  mark_price: string | number;
+  market_value: string | number;
+  realized_pnl: string | number;
+  unrealized_pnl: string | number;
+};
+
+export type SimulationManifest = {
+  run_id: string;
+  manifest_hash: string;
+  engine_version: string;
+  created_at: string;
+  git_commit?: string | null;
+  data_version_id?: string | null;
+  execution_profile?: Record<string, unknown>;
+  commission_profile?: Record<string, unknown>;
+  settlement_profile?: Record<string, unknown>;
+  daily_bar_path_policy?: string;
+  [key: string]: unknown;
+};
+
+export type SimulationCollection<T> = {
+  run_id: string;
+  items: T[];
+  count: number;
 };
 
 export type BacktestJobStatus = {
@@ -692,6 +797,17 @@ export type BacktestJobResult = {
     trades_per_day?: number;
     win_rate_morning?: number;
     win_rate_afternoon?: number;
+    verification_level?: "RESEARCH" | "VERIFIED";
+    simulation_run_id?: string;
+    data_version_id?: string;
+    engine_version?: string;
+    manifest_hash?: string;
+    result_hash?: string;
+    daily_bar_path_policy?: string;
+    manifest?: SimulationManifest | Record<string, unknown>;
+    orders?: SimulationOrder[];
+    fills?: SimulationFill[];
+    data_quality?: Record<string, unknown>;
   };
   logs?: string;
   status: string;
