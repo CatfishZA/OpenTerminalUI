@@ -631,6 +631,9 @@ class VirtualPortfolio(Base):
     current_cash: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    simulation_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 class VirtualPosition(Base):
@@ -665,6 +668,9 @@ class VirtualOrder(Base):
     commission: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     signal_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    simulation_order_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_orders.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 class VirtualTrade(Base):
@@ -679,6 +685,9 @@ class VirtualTrade(Base):
     price: Mapped[float] = mapped_column(Float)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     pnl_realized: Mapped[float | None] = mapped_column(Float, nullable=True)
+    simulation_fill_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_fills.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 class ChartDrawing(Base):

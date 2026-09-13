@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from statistics import mean, pstdev
 from typing import Any
@@ -18,6 +19,11 @@ from backend.models import (
     VirtualTrade,
 )
 from backend.services.marketdata_hub import MarketDataHub, get_marketdata_hub
+from backend.simulation.adapters.live_tick_adapter import LiveTickAdapter, instrument_from_legacy_symbol
+from backend.simulation.domain.ticks import MarketTick
+from backend.simulation.services.paper_simulation_service import PaperSimulationService
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -39,6 +45,10 @@ class PaperTradingEngine:
         self._queue: asyncio.Queue[dict[str, Any]] | None = None
         self._worker_task: asyncio.Task | None = None
         self._hub: MarketDataHub | None = None
+        self._tick_adapter = LiveTickAdapter()
+        self._canonical_ticks: dict[str, MarketTick] = {}
+        self._coalesced_ticks: dict[str, dict[str, Any]] = {}
+        self.queue_overflow_count = 0
 
     def start(self, hub: MarketDataHub | None = None) -> None:
         if self._started:
@@ -62,12 +72,24 @@ class PaperTradingEngine:
         ltp = _f(tick.get("ltp"), default=float("nan"))
         if symbol and ltp == ltp:
             self._mark_prices[symbol] = ltp
+        try:
+            canonical = self._tick_adapter.normalize(tick)
+            self._canonical_ticks[canonical.instrument.key] = canonical
+        except ValueError:
+            canonical = None
         if not self._started or self._queue is None:
             return
         try:
             self._queue.put_nowait(tick)
         except asyncio.QueueFull:
-            return
+            self.queue_overflow_count += 1
+            try:
+                overflow_tick = canonical or self._tick_adapter.normalize(tick)
+                self._canonical_ticks[overflow_tick.instrument.key] = overflow_tick
+                self._coalesced_ticks[overflow_tick.instrument.key] = tick
+            except ValueError:
+                logger.warning("Rejected malformed paper tick during queue overflow", exc_info=True)
+            logger.warning("Paper tick queue overflow; newest symbol tick coalesced", extra={"overflow_count": self.queue_overflow_count})
 
     async def _worker(self) -> None:
         while self._started:
@@ -76,9 +98,23 @@ class PaperTradingEngine:
             except (asyncio.CancelledError, RuntimeError):
                 break
             try:
+                try:
+                    canonical = self._tick_adapter.normalize(tick)
+                    self._canonical_ticks[canonical.instrument.key] = canonical
+                    db = SessionLocal()
+                    try:
+                        await PaperSimulationService(db).consume_market_tick(canonical)
+                    finally:
+                        db.close()
+                except ValueError:
+                    logger.warning("Rejected malformed paper tick", exc_info=True)
                 await self._evaluate_pending_orders(tick)
             except Exception:
-                continue
+                logger.exception("Paper tick processing failed")
+            finally:
+                if self._queue is not None and self._coalesced_ticks and not self._queue.full():
+                    _, newest = self._coalesced_ticks.popitem()
+                    self._queue.put_nowait(newest)
 
     async def _evaluate_pending_orders(self, tick: dict[str, Any]) -> None:
         symbol = str(tick.get("symbol") or "").strip().upper()
@@ -89,9 +125,11 @@ class PaperTradingEngine:
         try:
             rows = (
                 db.query(VirtualOrder)
+                .join(VirtualPortfolio, VirtualOrder.portfolio_id == VirtualPortfolio.id)
                 .filter(
                     VirtualOrder.symbol == symbol,
                     VirtualOrder.status == VirtualOrderStatus.PENDING.value,
+                    VirtualPortfolio.simulation_run_id.is_(None),
                 )
                 .all()
             )
@@ -220,6 +258,9 @@ class PaperTradingEngine:
         return (fill_price - _f(pos.avg_entry_price)) * _f(order.quantity)
 
     async def maybe_fill_market_order_now(self, db: Session, order: VirtualOrder) -> None:
+        portfolio = db.get(VirtualPortfolio, order.portfolio_id)
+        if portfolio is not None and portfolio.simulation_run_id is not None:
+            return
         if str(order.order_type).lower() != VirtualOrderType.MARKET.value:
             return
         ltp = self._mark_prices.get(order.symbol)
@@ -230,6 +271,12 @@ class PaperTradingEngine:
             ltp = _f(quote.get("last_price") or quote.get("c") or quote.get("regularMarketPrice") or quote.get("price"))
         if ltp and ltp > 0:
             self._fill_order(db, order, ltp)
+
+    def cached_tick_for(self, symbol: str) -> MarketTick | None:
+        try:
+            return self._canonical_ticks.get(instrument_from_legacy_symbol(symbol).key)
+        except ValueError:
+            return None
 
     def portfolio_performance(self, db: Session, portfolio_id: str) -> dict[str, Any]:
         trades = (

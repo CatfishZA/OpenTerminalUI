@@ -36,3 +36,16 @@ class PerShareCommissionModel:
 
     def calculate(self, order: Order, fill_quantity: Decimal, fill_price: Decimal) -> Decimal:  # noqa: ARG002
         return max(as_decimal(fill_quantity, "fill_quantity") * self.per_share, self.minimum)
+
+
+@dataclass(frozen=True, slots=True)
+class FixedCommissionModel:
+    amount: Decimal
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "amount", as_decimal(self.amount, "amount"))
+        if self.amount < 0:
+            raise ValueError("commission amount cannot be negative")
+
+    def calculate(self, order: Order, fill_quantity: Decimal, fill_price: Decimal) -> Decimal:  # noqa: ARG002
+        return self.amount

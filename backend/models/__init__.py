@@ -77,6 +77,7 @@ from backend.simulation.persistence.models import (
     SimulationPortfolioSnapshotORM,
     SimulationPositionSnapshotORM,
     SimulationRunORM,
+    SimulationSettlementObligationORM,
 )
 
 __all__ = [
@@ -150,6 +151,7 @@ __all__ = [
     "InstrumentMaster",
     "JournalEntry",
     "SimulationRunORM",
+    "SimulationSettlementObligationORM",
     "SimulationEventORM",
     "SimulationOrderORM",
     "SimulationFillORM",

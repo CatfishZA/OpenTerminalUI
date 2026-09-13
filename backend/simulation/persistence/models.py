@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.shared.db import Base
@@ -175,3 +175,22 @@ class SimulationAppliedCorporateActionORM(Base):
     action_type: Mapped[str] = mapped_column(String(32), nullable=False)
     effective_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class SimulationSettlementObligationORM(Base):
+    __tablename__ = "simulation_settlement_obligations"
+    __table_args__ = (
+        Index("ix_sim_settlement_run_date", "run_id", "settlement_date"),
+        Index("ix_sim_settlement_run_status", "run_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), ForeignKey("simulation_runs.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fill_id: Mapped[str] = mapped_column(String(64), ForeignKey("simulation_fills.id", ondelete="CASCADE"), unique=True)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    amount: Mapped[object] = mapped_column(AMOUNT, nullable=False)
+    settlement_date: Mapped[object] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
