@@ -10,23 +10,17 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { ErrorBoundary } from "../common/ErrorBoundary";
 import { MobileBottomNav } from "./MobileBottomNav";
-import { IconRail } from "./IconRail";
-import { StatusBar } from "./StatusBar";
-import { TopBar } from "./TopBar";
-import { CommandBar } from "./CommandBar";
 import { CommandPalette } from "./CommandPalette";
-import { TickerTape } from "./TickerTape";
 import { executeParsedCommand, parseCommand } from "./commanding";
-import { useSettingsStore } from "../../store/settingsStore";
 import { HudOverlay } from "./HudOverlay";
 import { AlertToasts } from "./AlertToasts";
 import { useNotificationStore } from "../../store/notificationStore";
-import type { ThemeVariant } from "../../store/settingsStore";
-import { TerminalSelect } from "../terminal/TerminalSelect";
-import { HotKeyPanelFloat } from "../trading/HotKeyPanelFloat";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { ShortcutOverlay } from "../common/ShortcutOverlay";
 import { WORKSPACE_PRESET_STORAGE_KEY } from "../../workspace/presets";
+import { GlobalHeader } from "./GlobalHeader";
+import { PrimarySidebar } from "./PrimarySidebar";
+import { WorkspaceOverflowMenu } from "./WorkspaceOverflowMenu";
 
 export type WorkspacePreset = "trader" | "quant" | "pm" | "risk" | "ops";
 
@@ -39,14 +33,6 @@ type TerminalShellContextValue = {
 };
 
 const TerminalShellContext = createContext<TerminalShellContextValue | null>(null);
-
-const PRESET_OPTIONS: Array<{ id: WorkspacePreset; label: string }> = [
-  { id: "trader", label: "Trader" },
-  { id: "quant", label: "Quant" },
-  { id: "pm", label: "PM" },
-  { id: "risk", label: "Risk" },
-  { id: "ops", label: "Ops" },
-];
 
 type RightRailSection = {
   id: string;
@@ -115,111 +101,15 @@ function DefaultRightRail({ title, sections }: { title: string; sections: RightR
   );
 }
 
-function WorkspaceControlBar({
-  preset,
-  setPreset,
-  rightRailEnabled,
-  rightRailOpen,
-  toggleRightRail,
-}: Pick<TerminalShellContextValue, "preset" | "setPreset" | "rightRailOpen" | "toggleRightRail"> & {
-  rightRailEnabled: boolean;
-}) {
-  const themeVariant = useSettingsStore((s) => s.themeVariant);
-  const setThemeVariant = useSettingsStore((s) => s.setThemeVariant);
-  const customAccentColor = useSettingsStore((s) => s.customAccentColor);
-  const setCustomAccentColor = useSettingsStore((s) => s.setCustomAccentColor);
-  const hudOverlayEnabled = useSettingsStore((s) => s.hudOverlayEnabled);
-  const setHudOverlayEnabled = useSettingsStore((s) => s.setHudOverlayEnabled);
-
-  const applyPreset = (nextPreset: WorkspacePreset) => {
-    setPreset(nextPreset);
-    window.dispatchEvent(new CustomEvent("ot:preset-change", { detail: nextPreset }));
-  };
-
-  return (
-    <div className="flex items-center justify-between gap-2 border-b border-terminal-border bg-terminal-panel/90 px-3 py-1.5 backdrop-blur">
-      <div className="flex items-center gap-2">
-        <span className="ot-type-label text-terminal-muted">Workspace</span>
-        <div className="flex flex-wrap items-center gap-1">
-          {PRESET_OPTIONS.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => applyPreset(option.id)}
-              className={`rounded-sm border px-2 py-1 ot-type-label ${
-                preset === option.id
-                  ? "border-terminal-accent bg-terminal-accent/10 text-terminal-accent"
-                  : "border-terminal-border text-terminal-muted hover:text-terminal-text"
-              }`}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <label className="inline-flex items-center gap-1 text-[11px] text-terminal-muted">
-          Theme
-          <TerminalSelect
-            size="sm"
-            tone="ui"
-            className="min-w-36"
-            value={themeVariant}
-            onChange={(e) => setThemeVariant(e.target.value as ThemeVariant)}
-          >
-            <option value="terminal-noir">Terminal Noir</option>
-            <option value="classic-bloomberg">Classic Bloomberg</option>
-            <option value="light-desk">Light Desk</option>
-            <option value="custom">Custom</option>
-          </TerminalSelect>
-        </label>
-        {themeVariant === "custom" ? (
-          <input
-            type="color"
-            className="h-6 w-8 cursor-pointer rounded-sm border border-terminal-border bg-transparent p-0"
-            aria-label="Custom accent color"
-            value={customAccentColor}
-            onChange={(e) => setCustomAccentColor(e.target.value)}
-          />
-        ) : null}
-        <button
-          type="button"
-          onClick={() => setHudOverlayEnabled(!hudOverlayEnabled)}
-          className={`rounded-sm border px-2 py-1 ot-type-label ${
-            hudOverlayEnabled
-              ? "border-terminal-accent text-terminal-accent"
-              : "border-terminal-border text-terminal-muted hover:text-terminal-text"
-          }`}
-        >
-          {hudOverlayEnabled ? "HUD On" : "HUD Off"}
-        </button>
-        {rightRailEnabled ? (
-          <button
-            type="button"
-            onClick={toggleRightRail}
-            className={`hidden xl:inline-flex rounded-sm border px-2 py-1 ot-type-label ${
-              rightRailOpen
-                ? "border-terminal-accent text-terminal-accent"
-                : "border-terminal-border text-terminal-muted hover:text-terminal-text"
-            }`}
-          >
-            {rightRailOpen ? "Hide Context Rail" : "Show Context Rail"}
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 export function TerminalShell({
   children,
   contentClassName = "",
-  hideTickerLoader = false,
-  statusBarTickerOverride,
-  showMobileBottomNav = false,
+  hideTickerLoader: _hideTickerLoader = false,
+  statusBarTickerOverride: _statusBarTickerOverride,
+  showMobileBottomNav: _showMobileBottomNav = false,
   workspacePresetStorageKey,
   defaultPreset = "trader",
-  showWorkspaceControls = true,
+  showWorkspaceControls: _showWorkspaceControls = true,
   rightRailTitle = "Context Rail",
   rightRailSections,
   rightRailContent,
@@ -264,28 +154,15 @@ export function TerminalShell({
   return (
     <TerminalShellContext.Provider value={shellCtx}>
       <div className="flex h-screen w-full overflow-hidden bg-terminal-bg text-terminal-text">
-        <div className="hidden sm:block">
-          <IconRail />
-        </div>
+        <PrimarySidebar />
 
         <div className="relative z-10 flex min-w-0 flex-1 flex-col">
-          <CommandBar
+          <GlobalHeader
             onExecute={async (command) => {
               const parsed = parseCommand(command);
               return executeParsedCommand(parsed, navigate);
             }}
           />
-          <TickerTape />
-          <TopBar hideTickerLoader={hideTickerLoader} />
-          {showWorkspaceControls ? (
-            <WorkspaceControlBar
-              preset={preset}
-              setPreset={setPreset}
-              rightRailEnabled={hasRightRail}
-              rightRailOpen={rightRailOpen}
-              toggleRightRail={() => setRightRailOpen(!rightRailOpen)}
-            />
-          ) : null}
           <div className="min-h-0 flex flex-1 overflow-hidden">
             <ErrorBoundary>
               <div className={`relative z-0 min-h-0 min-w-0 flex-1 overflow-auto ${contentClassName}`.trim()}>
@@ -298,11 +175,16 @@ export function TerminalShell({
                 )
               : null}
           </div>
-          <StatusBar tickerOverride={statusBarTickerOverride} />
         </div>
 
-        {showMobileBottomNav ? <MobileBottomNav /> : null}
-        <HotKeyPanelFloat />
+        <div className="md:hidden"><MobileBottomNav /></div>
+        <WorkspaceOverflowMenu
+          preset={preset}
+          setPreset={setPreset}
+          hasRightRail={hasRightRail}
+          rightRailOpen={rightRailOpen}
+          toggleRightRail={() => setRightRailOpen(!rightRailOpen)}
+        />
         <CommandPalette />
         <HudOverlay />
         <AlertToasts />

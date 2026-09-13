@@ -1552,6 +1552,13 @@ export function BacktestingPage() {
     sweep: renderSweepTab,
   };
 
+  const visualizationGroups: Array<{ label: string; tabs: typeof VIZ_TABS }> = [
+    { label: "Equity", tabs: VIZ_TABS.filter((tab) => ["chart", "equity", "monthly"].includes(tab.key)) },
+    { label: "Trades", tabs: VIZ_TABS.filter((tab) => ["trades", "metrics"].includes(tab.key)) },
+    { label: "Drawdown", tabs: VIZ_TABS.filter((tab) => ["drawdown", "rolling"].includes(tab.key)) },
+    { label: "Analysis", tabs: VIZ_TABS.filter((tab) => ["compare", "surface3d", "robustness", "sweep"].includes(tab.key)) },
+  ];
+
   const handleWorkspaceCommand = (command: string) => {
     const normalized = command.trim().toLowerCase();
     if (normalized.startsWith("/chart")) {
@@ -1571,21 +1578,21 @@ export function BacktestingPage() {
   };
 
   return (
-    <div className="h-full space-y-3 overflow-y-auto px-3 py-2 pb-4">
+    <div className="h-full space-y-5 overflow-y-auto px-4 py-4 pb-8 md:px-6 lg:px-8">
+      <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <p className="text-sm font-medium text-terminal-accent">Research workflow</p>
+          <h1 className="mt-1 text-2xl font-semibold text-terminal-text">Backtest</h1>
+          <p className="mt-2 text-sm text-terminal-muted">Test an idea quickly, then verify it against a persisted dataset when it is ready.</p>
+        </div>
+        <SavedViewsControl
+          pageLabel="Backtesting"
+          capture={() => ({ filters: { asset, market, dataTimeframe, start, end, strategyMode, verificationMode, dataVersionId, verifiedQuantity }, activeTabs: { activeTab }, chartLayout: { activeTab }, selectedTicker: asset })}
+        />
+      </header>
       <TerminalPanel
         title="Research Suites"
         subtitle="Backtesting + Model Lab"
-        actions={
-          <SavedViewsControl
-            pageLabel="Backtesting"
-            capture={() => ({
-              filters: { asset, market, dataTimeframe, start, end, strategyMode, verificationMode, dataVersionId, verifiedQuantity },
-              activeTabs: { activeTab },
-              chartLayout: { activeTab },
-              selectedTicker: asset,
-            })}
-          />
-        }
       >
         <div className="flex flex-wrap gap-2 text-xs">
           <Link className={`rounded border px-2 py-1 ${location.pathname.startsWith("/backtesting/model-lab") ? "border-terminal-border text-terminal-muted hover:text-terminal-text" : "border-terminal-accent bg-terminal-accent/10 text-terminal-accent"}`} to="/backtesting">
@@ -1596,7 +1603,29 @@ export function BacktestingPage() {
           </Link>
         </div>
       </TerminalPanel>
+      <section className="rounded-lg border border-terminal-border bg-terminal-panel p-5" aria-labelledby="backtest-setup-title">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div><h2 id="backtest-setup-title" className="font-semibold text-terminal-text">Backtest setup</h2><p className="mt-1 text-xs text-terminal-muted">Choose a mode and the minimum inputs needed for this run.</p></div>
+          <VerificationModeControl value={verificationMode} onChange={changeVerificationMode} />
+        </div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+          <label className="text-xs text-terminal-muted xl:col-span-2">Strategy<select aria-label="Strategy" className="mt-1.5 h-10 w-full rounded-md border border-terminal-border bg-terminal-bg px-3 text-sm text-terminal-text" value={strategyMode} onChange={(event) => setStrategyMode(event.target.value)}>{STRATEGY_CATALOG.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}<option value={CUSTOM_STRATEGY_VALUE}>Custom Python Script</option></select></label>
+          <label className="text-xs text-terminal-muted">Instrument<input aria-label="Instrument" className="mt-1.5 h-10 w-full rounded-md border border-terminal-border bg-terminal-bg px-3 text-sm uppercase text-terminal-text" value={asset} onChange={(event) => { const raw = event.target.value.toUpperCase().trim(); const prefixed = raw.match(/^(NSE|BSE|NYSE|NASDAQ|AMEX):([A-Z0-9._-]+)$/); if (prefixed) { setMarket(prefixed[1] as BacktestMarket); setAsset(prefixed[2]); } else { if (raw.endsWith(".NS")) setMarket("NSE"); if (raw.endsWith(".BO")) setMarket("BSE"); setAsset(raw); } }} /></label>
+          <label className="text-xs text-terminal-muted">Start<input aria-label="Start date" type="date" className="mt-1.5 h-10 w-full rounded-md border border-terminal-border bg-terminal-bg px-3 text-sm text-terminal-text" value={start} onChange={(event) => setStart(event.target.value)} /></label>
+          <label className="text-xs text-terminal-muted">End<input aria-label="End date" type="date" className="mt-1.5 h-10 w-full rounded-md border border-terminal-border bg-terminal-bg px-3 text-sm text-terminal-text" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+          <label className="text-xs text-terminal-muted">Capital<input aria-label="Capital" type="number" min={1} step={100} className="mt-1.5 h-10 w-full rounded-md border border-terminal-border bg-terminal-bg px-3 text-sm text-terminal-text" value={tradeCapital} onChange={(event) => setTradeCapital(Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 0)} /></label>
+          {verificationMode === "VERIFIED" ? <><label className="text-xs text-terminal-muted xl:col-span-2">Data version<select aria-label="Verified data version" className="mt-1.5 h-10 w-full rounded-md border border-terminal-border bg-terminal-bg px-3 text-sm text-terminal-text" value={dataVersionId} onChange={(event) => setDataVersionId(event.target.value)} disabled={dataVersionsLoading}><option value="">{dataVersionsLoading ? "Loading versions…" : "Select persisted data"}</option>{dataVersions.map((version) => <option key={version.id} value={version.id}>{version.name}{version.source ? ` · ${version.source}` : ""}</option>)}</select></label><label className="text-xs text-terminal-muted">Quantity<input aria-label="Verified quantity" type="number" min={0.00000001} step="any" className="mt-1.5 h-10 w-full rounded-md border border-terminal-border bg-terminal-bg px-3 text-sm text-terminal-text" value={verifiedQuantity} onChange={(event) => setVerifiedQuantity(event.target.valueAsNumber)} /></label></> : null}
+        </div>
+        <div className="mt-5 flex flex-col gap-3 border-t border-terminal-border/70 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-terminal-muted">{activePreset?.description || "Define a custom signal script in Advanced settings."}</p>
+          <button type="button" onClick={() => void submit()} disabled={!canSubmit} className="h-11 shrink-0 rounded-md bg-terminal-accent px-6 text-sm font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50">{submitInFlight || jobState === "queued" || jobState === "running" ? "Running…" : verificationMode === "VERIFIED" ? "Run verified backtest" : "Run backtest"}</button>
+        </div>
+        {error ? <div role="alert" className="mt-4 rounded-md border border-terminal-neg/50 bg-terminal-neg/10 p-3 text-sm text-terminal-neg">{error}</div> : null}
+      </section>
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_320px]">
+        <details className="group self-start rounded-lg border border-terminal-border bg-terminal-panel">
+          <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-terminal-text marker:hidden">Advanced settings <span className="ml-2 text-xs font-normal text-terminal-muted">Market, timeframe, execution costs, series, and custom scripts</span></summary>
+          <div className="border-t border-terminal-border p-3">
         <TerminalPanel title="Backtesting Control Deck" subtitle="Compact controls for chart-first workflow">
           <VerificationModeControl value={verificationMode} onChange={changeVerificationMode} />
           <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-8">
@@ -1676,6 +1705,8 @@ export function BacktestingPage() {
           {strategyMode === CUSTOM_STRATEGY_VALUE && <label className="mt-2 block"><span className="mb-1 block text-[11px] uppercase tracking-wide text-terminal-muted">Python Strategy Script</span><textarea className="h-36 w-full resize-none rounded border border-terminal-border bg-terminal-bg px-2 py-1 font-mono text-[11px] text-terminal-text" value={script} onChange={(e) => setScript(e.target.value)} /></label>}
           {error && <div className="mt-2 rounded border border-terminal-neg bg-terminal-neg/10 p-2 text-xs text-terminal-neg">{error}</div>}
         </TerminalPanel>
+          </div>
+        </details>
         <TerminalPanel title="Backtest Performance" subtitle="Model result summary"><div className="space-y-2"><div className={`text-5xl font-bold tracking-tight ${returnClass}`}>{result?.result ? fmtPct(result.result.total_return) : "-"}</div><div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-terminal-text"><div className="text-terminal-muted">Initial Capital</div><div>{fmtMoney(initialCapital)}</div><div className="text-terminal-muted">Final Equity</div><div>{fmtMoney(finalEquity)}</div><div className="text-terminal-muted">Net P/L</div><div className={pnlAmount >= 0 ? "text-terminal-pos" : "text-terminal-neg"}>{fmtMoney(pnlAmount)}</div><div className="text-terminal-muted">Cash Left</div><div>{fmtMoney(endingCash)}</div><div className="text-terminal-muted">Sharpe</div><div>{result?.result ? result.result.sharpe.toFixed(2) : "-"}</div><div className="text-terminal-muted">Max Drawdown</div><div>{result?.result ? fmtPct(result.result.max_drawdown) : "-"}</div><div className="text-terminal-muted">Trades</div><div>{trades.length}</div><div className="text-terminal-muted">Total Qty</div><div>{totalTradeQty.toFixed(2)}</div></div><div className="border-t border-terminal-border/40 pt-2"><div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-terminal-text"><div className="text-terminal-muted">Win Rate</div><div>{(Number(analyticsSummary.win_rate) || 0).toFixed(2)}%</div><div className="text-terminal-muted">Profit Factor</div><div>{(Number(analyticsSummary.profit_factor) || 0).toFixed(2)}</div><div className="text-terminal-muted">Expectancy</div><div>{fmtMoney(Number(analyticsSummary.expectancy) || 0)}</div>{result?.result && (result.result.max_intraday_drawdown ?? 0) < 0 && (<><div className="text-terminal-muted">Max Intraday DD</div><div>{fmtPct(result.result.max_intraday_drawdown ?? 0)}</div><div className="text-terminal-muted">Avg Hold (Min)</div><div>{(result.result.average_hold_time_minutes || 0).toFixed(1)}m</div><div className="text-terminal-muted">Trades / Day</div><div>{(result.result.trades_per_day || 0).toFixed(1)}</div><div className="text-terminal-muted">Win Rate (AM/PM)</div><div>{(result.result.win_rate_morning || 0).toFixed(1)}% / {(result.result.win_rate_afternoon || 0).toFixed(1)}%</div></>)}</div></div></div></TerminalPanel>
       </div>
 
@@ -1690,7 +1721,10 @@ export function BacktestingPage() {
       ) : null}
 
       {jobState === "done" && result?.result?.verification_level === "VERIFIED" && result.result.simulation_run_id ? (
-        <ExecutionArtifactsPanel simulationRunId={result.result.simulation_run_id} />
+        <details className="rounded-lg border border-terminal-border bg-terminal-panel">
+          <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-terminal-text">Execution artifacts <span className="ml-2 text-xs font-normal text-terminal-muted">Orders, fills, ledger, and event evidence</span></summary>
+          <div className="border-t border-terminal-border p-3"><ExecutionArtifactsPanel simulationRunId={result.result.simulation_run_id} /></div>
+        </details>
       ) : null}
 
       {result?.result && (
@@ -1721,25 +1755,16 @@ export function BacktestingPage() {
         </TerminalPanel>
       ) : (
         <TerminalPanel title="Backtest Visualizations" subtitle={`${tradedAsset} ${market}`}>
-          <div className="mb-3 flex flex-wrap gap-2">
-            {VIZ_TABS.map((tab) => {
-              const active = tab.key === activeTab;
-              return (
-                <button
-                  key={tab.key}
-                  className={`rounded border px-2 py-1 text-[11px] ${active ? "border-terminal-accent bg-terminal-accent/10 text-terminal-accent" : "border-terminal-border text-terminal-muted hover:bg-terminal-border/20"}`}
-                  onClick={() => setActiveTab(tab.key)}
-                >
-                  <span className="mr-1">{tab.icon}</span>
-                  {tab.label}
-                </button>
-              );
-            })}
+          <div className="mb-4 grid gap-3 border-b border-terminal-border/70 pb-3 md:grid-cols-2 xl:grid-cols-4" aria-label="Backtest result views">
+            {visualizationGroups.map((group) => <div key={group.label}><p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-terminal-muted">{group.label}</p><div className="flex flex-wrap gap-1">{group.tabs.map((tab) => { const active = tab.key === activeTab; return <button key={tab.key} className={`rounded-md border px-2.5 py-1.5 text-xs ${active ? "border-terminal-accent/50 bg-terminal-accent/10 text-terminal-text" : "border-terminal-border text-terminal-muted hover:text-terminal-text"}`} onClick={() => setActiveTab(tab.key)}>{tab.label}</button>; })}</div></div>)}
           </div>
           {renderActiveTab()}
         </TerminalPanel>
       )}
 
+      <details className="rounded-lg border border-terminal-border bg-terminal-panel">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-terminal-text">Advanced analysis <span className="ml-2 text-xs font-normal text-terminal-muted">Costs, integrity, validation, 3D studies, simulations, blotter, and logs</span></summary>
+        <div className="space-y-3 border-t border-terminal-border p-3">
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
         <TerminalPanel title="Transaction Costs + Data Integrity" subtitle="Execution friction and data quality checks">
           <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
@@ -1793,6 +1818,8 @@ export function BacktestingPage() {
           <TerminalPanel title="Execution Logs" subtitle="Strategy stdout/stderr" className="h-1/2" bodyClassName="flex h-full min-h-0 flex-col overflow-hidden"><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-terminal-bg p-2 font-mono text-[11px] text-terminal-muted">{result?.logs || "No logs"}</pre></TerminalPanel>
         </div>
       </div>
+        </div>
+      </details>
     </div>
   );
 }

@@ -2,7 +2,6 @@ import { Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AgentConsole } from "./agent/components/AgentConsole";
-import { AgentLauncher } from "./agent/components/AgentLauncher";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { InstallPrompt } from "./components/pwa/InstallPrompt";
 import { ProtectedRoute } from "./components/ProtectedRoute";
@@ -20,7 +19,7 @@ const BacktestingLayout = lazyWithRetry(() => import("./pages/BacktestingLayout"
 const FnoLayout = lazyWithRetry(() => import("./fno/FnoLayout").then((m) => ({ default: m.FnoLayout })));
 const AccountLayout = lazyWithRetry(() => import("./pages/AccountLayout").then((m) => ({ default: m.AccountLayout })));
 
-const HomePage = lazyWithRetry(() => import("./pages/HomePage").then((m) => ({ default: m.HomePage })));
+const HomePage = lazyWithRetry(() => import("./pages/ProductHomePage").then((m) => ({ default: m.ProductHomePage })));
 
 const StockDetailPage = lazyWithRetry(() => import("./pages/StockDetail").then((m) => ({ default: m.StockDetailPage })));
 const SecurityHubPage = lazyWithRetry(() => import("./pages/SecurityHub").then((m) => ({ default: m.SecurityHubPage })));
@@ -35,7 +34,7 @@ const PortfolioPage = lazyWithRetry(() => import("./pages/Portfolio").then((m) =
 const WatchlistPage = lazyWithRetry(() => import("./pages/Watchlist").then((m) => ({ default: m.WatchlistPage })));
 const NewsPage = lazyWithRetry(() => import("./pages/News").then((m) => ({ default: m.NewsPage })));
 const AlertsPage = lazyWithRetry(() => import("./pages/Alerts").then((m) => ({ default: m.AlertsPage })));
-const PaperTradingPage = lazyWithRetry(() => import("./pages/PaperTrading").then((m) => ({ default: m.PaperTradingPage })));
+const PaperTradingPage = lazyWithRetry(() => import("./pages/ProductPaperTradingPage").then((m) => ({ default: m.ProductPaperTradingPage })));
 const PositionSizerPage = lazyWithRetry(() => import("./pages/PositionSizerPage").then((m) => ({ default: m.PositionSizerPage })));
 const TradeJournalPage = lazyWithRetry(() => import("./pages/TradeJournalPage").then((m) => ({ default: m.TradeJournalPage })));
 const ShadowAccountPage = lazyWithRetry(() => import("./pages/ShadowAccount").then((m) => ({ default: m.ShadowAccountPage })));
@@ -104,6 +103,7 @@ const PortfolioLabBlendsPage = lazyWithRetry(() => import("./pages/PortfolioLabB
 
 const AccountPage = lazyWithRetry(() => import("./pages/Account").then((m) => ({ default: m.AccountPage })));
 const CockpitDashboard = lazyWithRetry(() => import("./pages/Cockpit"));
+const ToolsPage = lazyWithRetry(() => import("./pages/ToolsPage").then((m) => ({ default: m.ToolsPage })));
 
 const RouteLoadingFallback = (
   <div className="flex min-h-[50vh] items-center justify-center p-4">
@@ -121,7 +121,6 @@ function App() {
       <ThemeRuntime />
       <TerminalBackground />
       <AgentConsole />
-      <AgentLauncher />
       <div className="ot-vignette-overlay" />
       <div className="ot-scanline-overlay" />
       <InstallPrompt show={showInstallPrompt} onInstall={() => installPrompt?.prompt()} onDismiss={dismissInstallPrompt} />
@@ -178,6 +177,7 @@ function App() {
             <Route path="ops" element={<OpsDashboardPage />} />
             <Route path="plugins" element={<PluginsPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="tools" element={<ToolsPage />} />
             <Route path="chart-workstation" element={<ChartWorkstationPage />} />
             <Route path="research" element={<ResearchPage />} />
             <Route path="mta" element={<MultiTimeframePage />} />
@@ -258,6 +258,7 @@ function App() {
           <Route path="/oms" element={<Navigate to="/equity/oms" replace />} />
           <Route path="/ops" element={<Navigate to="/equity/ops" replace />} />
           <Route path="/settings" element={<Navigate to="/equity/settings" replace />} />
+          <Route path="/tools" element={<Navigate to="/equity/tools" replace />} />
           <Route path="/plugins" element={<Navigate to="/equity/plugins" replace />} />
           <Route path="/saved-views" element={<Navigate to="/equity/saved-views" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />

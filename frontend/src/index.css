@@ -4,19 +4,17 @@
 
 body {
   margin: 0;
-  font-family: var(--ot-font-data, "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace);
-  letter-spacing: 0.01em;
+  font-family: var(--ot-font-ui, "Inter", "Segoe UI", system-ui, sans-serif);
+  font-size: 14px;
+  letter-spacing: 0;
   background: var(--ot-color-canvas, #0a0a0a);
   color: var(--ot-color-text-primary, #cccccc);
   text-rendering: geometricPrecision;
-  line-height: var(--ot-line-height-data, 1.25);
+  line-height: 1.5;
   font-variant-numeric: tabular-nums;
 }
 
-/* Typography role guidance (UI-011):
-   - default body/data surfaces use mono (`--ot-font-data`)
-   - headings/navigation/labels use UI sans (`--ot-font-ui`)
-   - status/badges/table headers use compact uppercase role tokens */
+/* UI copy defaults to a readable sans; market values and identifiers opt into `.ot-type-data`. */
 
 * {
   box-sizing: border-box;

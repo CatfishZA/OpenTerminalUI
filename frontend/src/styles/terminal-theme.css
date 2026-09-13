@@ -222,7 +222,8 @@
 .ot-app-shell {
   min-height: 100vh;
   color: var(--ot-text);
-  font-family: var(--ot-font-data);
+  font-family: var(--ot-font-ui);
+  line-height: var(--ot-line-height-copy);
   background: var(--ot-black);
 }
 
