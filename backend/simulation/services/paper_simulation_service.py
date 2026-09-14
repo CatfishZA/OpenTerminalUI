@@ -49,6 +49,7 @@ from backend.simulation.persistence.models import (
     SimulationRunORM,
 )
 from backend.simulation.persistence.paper_repositories import PaperSettlementRepository
+from backend.simulation.persistence.reconciliation_repositories import ExecutionObservationRepository
 from backend.simulation.persistence.serializers import to_primitive
 from backend.simulation.services.manifest_service import sha256_value
 
@@ -86,6 +87,7 @@ class PaperSimulationService:
         self.max_cached_tick_age_seconds = max_cached_tick_age_seconds
         self.projection = PaperLegacyProjection()
         self.settlements = PaperSettlementRepository(db)
+        self.observations = ExecutionObservationRepository(db)
 
     @staticmethod
     def lock_for(run_id: str) -> asyncio.Lock:
@@ -211,6 +213,8 @@ class PaperSimulationService:
         commission: Decimal,
         cached_tick: MarketTick | None = None,
         submitted_at: datetime | None = None,
+        reconciliation_key: str | None = None,
+        strategy_order_id: str | None = None,
     ) -> VirtualOrder:
         if not portfolio.simulation_run_id:
             raise ValueError("PAPER_PORTFOLIO_MIGRATION_REQUIRED")
@@ -252,10 +256,12 @@ class PaperSimulationService:
                     submitted_at=now,
                     limit_price=limit_price,
                     stop_price=stop_price,
+                    strategy_order_id=strategy_order_id,
                     metadata={
                         "virtual_order_id": virtual.id,
                         "slippage_bps": str(slippage_bps),
                         "commission": str(commission),
+                        **({"reconciliation_key": reconciliation_key} if reconciliation_key else {}),
                     },
                 )
                 self._append_event(run_id, EventType.ORDER_SUBMITTED, now, order_id=order.id)
@@ -460,6 +466,13 @@ class PaperSimulationService:
                 liquidity_flag=result.fill.liquidity_flag,
                 metadata_json={"liquidity_assumption": result.liquidity_assumption, "source": tick.source},
             )
+        )
+        self.observations.create_from_fill_tick(
+            run_id=order.run_id,
+            order_id=order.id,
+            fill_id=result.fill.id,
+            tick=tick,
+            liquidity_assumption=result.liquidity_assumption,
         )
         for entry in result.ledger:
             self._save_ledger(entry)

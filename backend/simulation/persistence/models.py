@@ -194,3 +194,71 @@ class SimulationSettlementObligationORM(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SimulationReconciliationORM(Base):
+    __tablename__ = "simulation_reconciliations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    baseline_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("simulation_runs.id", ondelete="CASCADE"), index=True)
+    paper_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("simulation_runs.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    alignment_policy: Mapped[str] = mapped_column(String(32), nullable=False)
+    allow_research_baseline: Mapped[bool] = mapped_column(nullable=False, default=False)
+    include_low_confidence: Mapped[bool] = mapped_column(nullable=False, default=True)
+    paper_cutoff_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    paper_cutoff_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    baseline_manifest_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    baseline_result_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    paper_manifest_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    request_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    report_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    compatibility_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    summary_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    calibration_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    report_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SimulationReconciliationItemORM(Base):
+    __tablename__ = "simulation_reconciliation_items"
+    __table_args__ = (
+        UniqueConstraint("reconciliation_id", "sequence", name="uq_sim_reconciliation_item_sequence"),
+        Index("ix_sim_reconciliation_item_type", "reconciliation_id", "item_type"),
+        Index("ix_sim_reconciliation_instrument", "reconciliation_id", "instrument_key"),
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
+    reconciliation_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("simulation_reconciliations.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    item_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    instrument_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    baseline_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    paper_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    match_status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    match_basis: Mapped[str] = mapped_column(String(32), nullable=False)
+    match_confidence: Mapped[str] = mapped_column(String(16), nullable=False)
+    divergence_codes_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    metrics_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class SimulationExecutionObservationORM(Base):
+    __tablename__ = "simulation_execution_observations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), ForeignKey("simulation_runs.id", ondelete="CASCADE"), index=True)
+    order_id: Mapped[str] = mapped_column(String(64), ForeignKey("simulation_orders.id", ondelete="CASCADE"), index=True)
+    fill_id: Mapped[str] = mapped_column(String(64), ForeignKey("simulation_fills.id", ondelete="CASCADE"), unique=True)
+    instrument_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    tick_price: Mapped[object] = mapped_column(AMOUNT, nullable=False)
+    bid: Mapped[object | None] = mapped_column(AMOUNT, nullable=True)
+    ask: Mapped[object | None] = mapped_column(AMOUNT, nullable=True)
+    tick_size: Mapped[object | None] = mapped_column(AMOUNT, nullable=True)
+    tick_source: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    liquidity_assumption: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

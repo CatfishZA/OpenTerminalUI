@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.simulation.domain.enums import SimulationMode, VerificationLevel
+from backend.simulation.domain.reconciliation import AlignmentPolicy
 
 
 class StrictModel(BaseModel):
@@ -120,3 +121,12 @@ class CollectionResponse(StrictModel):
     run_id: str
     items: list[dict[str, Any]]
     count: int
+
+
+class ReconciliationCreate(StrictModel):
+    baseline_run_id: str = Field(min_length=1, max_length=64)
+    paper_run_id: str = Field(min_length=1, max_length=64)
+    paper_cutoff_sequence: int | None = Field(default=None, ge=1)
+    alignment_policy: AlignmentPolicy = AlignmentPolicy.KEYED_THEN_SIGNATURE
+    allow_research_baseline: bool = False
+    include_low_confidence_matches: bool = True

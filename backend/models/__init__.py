@@ -76,7 +76,10 @@ from backend.simulation.persistence.models import (
     SimulationOrderORM,
     SimulationPortfolioSnapshotORM,
     SimulationPositionSnapshotORM,
+    SimulationReconciliationItemORM,
+    SimulationReconciliationORM,
     SimulationRunORM,
+    SimulationExecutionObservationORM,
     SimulationSettlementObligationORM,
 )
 
@@ -159,4 +162,7 @@ __all__ = [
     "SimulationPositionSnapshotORM",
     "SimulationPortfolioSnapshotORM",
     "SimulationAppliedCorporateActionORM",
+    "SimulationReconciliationORM",
+    "SimulationReconciliationItemORM",
+    "SimulationExecutionObservationORM",
 ]

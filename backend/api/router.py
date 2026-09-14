@@ -49,6 +49,7 @@ from backend.saved_views.routes import router as saved_views_router
 from backend.api.routes.screener_alerts import router as screener_alerts_router
 from backend.tca.routes import router as tca_router
 from backend.simulation.api.routes import router as simulation_router
+from backend.simulation.api.reconciliation_routes import router as simulation_reconciliation_router
 
 api_router = APIRouter()
 
@@ -98,6 +99,7 @@ api_router.include_router(tca_router, prefix="/api")
 api_router.include_router(chart_workstation_router)
 api_router.include_router(charts_router)
 api_router.include_router(simulation_router)
+api_router.include_router(simulation_reconciliation_router)
 
 # Product Feature Pack (Wave 1): backtesting + stock-picking
 api_router.include_router(tearsheet_router, prefix="/api")

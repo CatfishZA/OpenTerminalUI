@@ -41,6 +41,8 @@ class OrderCreateRequest(BaseModel):
     sl_price: Decimal | None = None
     slippage_bps: Decimal = Decimal("5")
     commission: Decimal = Decimal("0")
+    reconciliation_key: str | None = Field(default=None, max_length=160)
+    strategy_order_id: str | None = Field(default=None, max_length=64)
 
 
 class DeployStrategyRequest(BaseModel):
@@ -163,6 +165,8 @@ async def place_virtual_order(
                 slippage_bps=payload.slippage_bps,
                 commission=payload.commission,
                 cached_tick=get_paper_engine().cached_tick_for(symbol),
+                reconciliation_key=payload.reconciliation_key,
+                strategy_order_id=payload.strategy_order_id,
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

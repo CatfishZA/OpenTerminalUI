@@ -10,6 +10,14 @@ from backend.simulation.domain.market import MarketBar, MarketDataManifest
 from backend.simulation.domain.orders import Order
 from backend.simulation.domain.positions import Position
 from backend.simulation.domain.paper import PaperSessionSpec
+from backend.simulation.domain.reconciliation import (
+    AlignmentPolicy,
+    BacktestPaperReconciliationSpec,
+    MatchBasis,
+    MatchConfidence,
+    MatchStatus,
+    ReconciliationStatus,
+)
 from backend.simulation.domain.results import PortfolioSnapshot, PositionSnapshot, SimulationResult
 from backend.simulation.domain.run import RunManifest, RunStatus, SimulationRunSpec
 from backend.simulation.domain.strategy import StrategyContext, StrategyIntent
