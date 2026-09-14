@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -14,6 +14,7 @@ from backend.simulation.domain.results import PortfolioSnapshot, PositionSnapsho
 from backend.simulation.domain.run import SimulationRunSpec
 from backend.simulation.domain.strategy import StrategyContext, StrategyIntent
 from backend.simulation.engine.account_engine import AccountEngine
+from backend.simulation.engine.corporate_action_engine import CorporateActionEngine
 from backend.simulation.engine.matching_engine import MatchingEngine
 from backend.simulation.engine.order_manager import OrderManager
 from backend.simulation.engine.result_builder import ResultBuilder
@@ -55,6 +56,9 @@ class DailySessionState:
     bars_by_session: dict[Any, dict[Any, MarketBar]]
     sequence: int = 0
     order_sequence: int = 0
+    corporate_actions_by_session: dict[Any, list[Any]] = field(default_factory=dict)
+    applied_action_ids: set[str] = field(default_factory=set)
+    dividend_entitlements: list[Any] = field(default_factory=list)
 
 
 class DailySessionKernel:
@@ -66,6 +70,7 @@ class DailySessionKernel:
         self.orders = OrderManager()
         self.matcher = MatchingEngine(dependencies.execution)
         self.accounting = AccountEngine()
+        self.corporate_actions = CorporateActionEngine()
         self.valuation = ValuationEngine()
         self.settlement = SettlementEngine(int(state.spec.settlement_profile.get("settlement_days", 1)))
 
@@ -248,7 +253,56 @@ class DailySessionKernel:
         last = max(day_bars.values(), key=lambda item: item.ts_close)
         self.emit(EventType.SESSION_START, first.ts_open)
         self.emit(EventType.SETTLEMENT, first.ts_open, payload={"fill_ids": self.settlement.process(account, day)})
-        self.emit(EventType.CORPORATE_ACTION, first.ts_open, payload={"applied": []})
+        session_actions = state.corporate_actions_by_session.get(day, [])
+        action_result = self.corporate_actions.apply_session_actions(
+            account, session_actions, day, run_id=state.run_id, at=first.ts_open,
+            open_orders=account.open_orders, applied_action_ids=state.applied_action_ids,
+            entitlements=state.dividend_entitlements,
+        )
+        action_by_id = {action.id: action for action in session_actions}
+        action_records = getattr(self.d, "corporate_action_records", None)
+        for order in action_result.adjusted_orders:
+            self.save_order(order)
+        for payload in action_result.applied:
+            action = action_by_id[payload["source_action_id"]]
+            if action.action_type.value == "SPLIT" and action.instrument in state.marks and action.factor:
+                state.marks[action.instrument] /= action.factor
+            if action_records:
+                action_records.save_applied(state.run_id, action, first.ts_open, payload)
+        for entitlement in action_result.entitlements_created:
+            if action_records:
+                action_records.save_entitlement(entitlement)
+        for entitlement in action_result.entitlements_paid:
+            if action_records:
+                action_records.save_entitlement(entitlement)
+        action_payload = {"applied": list(action_result.applied)}
+        if action_result.entitlements_paid:
+            action_payload["payments"] = [
+                {"source_action_id": item.corporate_action_source_id, "entitlement_id": item.id,
+                 "amount": str(item.total_amount), "currency": item.currency}
+                for item in action_result.entitlements_paid
+            ]
+        self.emit(EventType.CORPORATE_ACTION, first.ts_open, payload=action_payload)
+        for entry in action_result.ledger_entries:
+            state.result.ledger.append(entry)
+            self.d.ledger.append(entry)
+            if self.d.records:
+                self.d.records.save_ledger(entry)
+            self.emit(EventType.LEDGER_ENTRY, first.ts_open, entry.instrument, payload={
+                "entry_type": entry.entry_type.value, "amount": str(entry.amount),
+                "corporate_action_id": entry.corporate_action_id,
+            })
+        if action_records:
+            ledger_ids = {
+                entry.corporate_action_id: entry.id for entry in action_result.ledger_entries
+            }
+            for entitlement in action_result.entitlements_paid:
+                action_records.mark_action_paid(
+                    state.run_id,
+                    entitlement.corporate_action_source_id,
+                    first.ts_open,
+                    ledger_ids.get(entitlement.corporate_action_source_id),
+                )
         for instrument in ordered:
             self.emit(EventType.BAR_OPEN, day_bars[instrument].ts_open, instrument, payload={"open": str(day_bars[instrument].open)})
         self.emit(EventType.OPEN_ORDER_MATCH, first.ts_open)

@@ -18,6 +18,7 @@ from backend.simulation.persistence.repositories import (
     SqlAlchemyLedgerRepository,
     SqlAlchemySimulationRecordRepository,
 )
+from backend.simulation.persistence.corporate_action_repositories import CorporateActionRepository
 
 
 def build_daily_simulator(db: Session, spec: SimulationRunSpec) -> DailySimulator:
@@ -68,4 +69,5 @@ def build_daily_simulator(db: Session, spec: SimulationRunSpec) -> DailySimulato
         event_store=SqlAlchemyEventStore(db),
         ledger=SqlAlchemyLedgerRepository(db),
         records=SqlAlchemySimulationRecordRepository(db),
+        corporate_action_records=CorporateActionRepository(db, auto_commit=True),
     ))

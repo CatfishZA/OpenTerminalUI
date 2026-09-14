@@ -204,6 +204,30 @@ class SimulationAppliedCorporateActionORM(Base):
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
+class SimulationCorporateActionEntitlementORM(Base):
+    __tablename__ = "simulation_corporate_action_entitlements"
+    __table_args__ = (
+        UniqueConstraint("run_id", "corporate_action_source_id", name="uq_sim_ca_entitlement_run_source"),
+        Index("ix_sim_ca_entitlement_run_status", "run_id", "status"),
+        Index("ix_sim_ca_entitlement_run_pay_date", "run_id", "pay_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), ForeignKey("simulation_runs.id", ondelete="CASCADE"), index=True)
+    corporate_action_source_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    instrument_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    action_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    entitlement_date: Mapped[date] = mapped_column(Date, nullable=False)
+    pay_date: Mapped[date] = mapped_column(Date, nullable=False)
+    eligible_quantity: Mapped[object] = mapped_column(AMOUNT, nullable=False)
+    cash_amount_per_share: Mapped[object] = mapped_column(AMOUNT, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    total_amount: Mapped[object] = mapped_column(AMOUNT, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class SimulationSettlementObligationORM(Base):
     __tablename__ = "simulation_settlement_obligations"
     __table_args__ = (

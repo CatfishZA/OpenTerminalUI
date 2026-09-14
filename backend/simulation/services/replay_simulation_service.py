@@ -30,13 +30,14 @@ from backend.simulation.engine.daily_simulator import DailySimulator
 from backend.simulation.engine.daily_session_kernel import DailySessionKernel, DailySessionState
 from backend.simulation.engine.result_builder import ResultBuilder
 from backend.simulation.persistence.models import (
-    SimulationEventORM, SimulationFillORM, SimulationLedgerEntryORM, SimulationOrderORM,
+    SimulationAppliedCorporateActionORM, SimulationEventORM, SimulationFillORM, SimulationLedgerEntryORM, SimulationOrderORM,
     SimulationPortfolioSnapshotORM, SimulationPositionSnapshotORM, SimulationReplaySessionORM,
     SimulationRunORM, SimulationSettlementObligationORM,
 )
 from backend.simulation.persistence.replay_repositories import (
     ReplayEventStore, ReplayLedgerRepository, ReplayRecordRepository,
 )
+from backend.simulation.persistence.corporate_action_repositories import CorporateActionRepository
 from backend.simulation.persistence.serializers import to_primitive
 from backend.simulation.services.manifest_service import ManifestService, sha256_value
 from backend.simulation.services.reconciliation_service import ReconciliationService
@@ -89,10 +90,20 @@ class ReplaySimulationService:
         try:
             simulator = build_daily_simulator(self.db, spec)
             bars = list(simulator.d.market_data.iter_daily_events(list(spec.universe), spec.start, spec.end))
-            DailySimulator._validate(spec, bars)
+            actions = list(simulator.d.corporate_actions.events(
+                list(spec.universe), spec.start, spec.end, spec.data_version_id,
+                verification_level=spec.verification_level,
+            ))
+            DailySimulator._validate(spec, bars, actions=actions, manifest=simulator.d.market_data.manifest())
         except ReplaySimulationError:
             raise
         except Exception as exc:
+            code = str(exc).split(":", 1)[0]
+            if code.startswith("CORPORATE_ACTION_") or code in {
+                "INVALID_OHLC", "DUPLICATE_BAR", "VERIFIED_DATA_MISSING",
+                "ADJUSTED_DATA_CORPORATE_ACTION_CONFLICT",
+            }:
+                raise ReplaySimulationError(code, str(exc)) from exc
             raise ReplaySimulationError("REPLAY_DATA_MISSING", str(exc)) from exc
         sessions = sorted({bar.ts_open.date() for bar in bars})
         if not sessions:
@@ -213,7 +224,13 @@ class ReplaySimulationService:
         try:
             simulator = build_daily_simulator(self.db, spec)
             bars = list(simulator.d.market_data.iter_daily_events(list(spec.universe), spec.start, spec.end))
-            DailySimulator._validate(spec, bars)
+            actions = list(simulator.d.corporate_actions.events(
+                list(spec.universe), spec.start, spec.end, spec.data_version_id,
+                verification_level=spec.verification_level,
+            ))
+            integrity = DailySimulator._validate(
+                spec, bars, actions=actions, manifest=simulator.d.market_data.manifest()
+            )
             bars_by_session: dict[date, dict[InstrumentId, Any]] = {}
             for bar in bars:
                 bars_by_session.setdefault(bar.ts_open.date(), {})[bar.instrument] = bar
@@ -236,14 +253,22 @@ class ReplaySimulationService:
                 event_store=ReplayEventStore(self.db),
                 ledger=ReplayLedgerRepository(self.db),
                 records=ReplayRecordRepository(self.db),
+                corporate_action_records=CorporateActionRepository(self.db, auto_commit=False),
             )
             sequence = int(self.db.query(func.coalesce(func.max(SimulationEventORM.sequence), 0)).filter_by(run_id=run_id).scalar())
             order_sequence = int(self.db.query(func.count(SimulationOrderORM.id)).filter_by(run_id=run_id).scalar())
             if sequence != replay.last_event_sequence:
                 raise ReplaySimulationError("REPLAY_CHECKPOINT_MISMATCH", "event sequence diverged")
+            action_records = dependencies.corporate_action_records
+            actions_by_session = {}
+            for action in actions:
+                actions_by_session.setdefault(action.ex_date, []).append(action)
             state = DailySessionState(
                 run_id, spec, account, result, history, marks, sessions, bars_by_session,
                 sequence=sequence, order_sequence=order_sequence,
+                corporate_actions_by_session=actions_by_session,
+                applied_action_ids=action_records.applied_ids(run_id),
+                dividend_entitlements=action_records.entitlements(run_id),
             )
             kernel = DailySessionKernel(dependencies, state)
             replay.control_status = ReplayControlStatus.ADVANCING.value
@@ -270,7 +295,9 @@ class ReplaySimulationService:
                 if not replay.finish_called:
                     kernel.finish(last.ts_close)
                     replay.finish_called = True
-                self._finalize(run, replay, spec, result, account)
+                self._finalize(
+                    run, replay, spec, result, account, integrity, actions, state.applied_action_ids
+                )
             else:
                 replay.control_status = ReplayControlStatus.PAUSED.value
             replay.checkpoint_hash = self._checkpoint_hash(replay, account, replay.strategy_state_json)
@@ -291,8 +318,15 @@ class ReplaySimulationService:
                 raise
             raise ReplaySimulationError("REPLAY_ENGINE_INVARIANT_FAILED", str(exc)) from exc
 
-    def _finalize(self, run, replay, spec, result, account) -> None:  # noqa: ANN001
-        reconciliation = ReconciliationService().reconcile(spec.initial_cash, result.ledger, result.fills, account)
+    def _finalize(self, run, replay, spec, result, account, integrity, actions, applied_ids) -> None:  # noqa: ANN001
+        reconciliation = ReconciliationService().reconcile(
+            spec.initial_cash,
+            result.ledger,
+            result.fills,
+            account,
+            corporate_actions=actions,
+            applied_corporate_action_ids=applied_ids,
+        )
         summary = {
             "status": "DONE", "initial_cash": spec.initial_cash, "final_equity": account.equity,
             "ending_cash": account.base_cash.total, "realized_pnl": account.realized_pnl,
@@ -305,7 +339,10 @@ class ReplaySimulationService:
             "ledger": result.ledger, "portfolio": result.portfolio_snapshots,
             "positions": result.position_snapshots, "summary": summary,
         })
-        built = result.build(summary, data_quality={"status": "VALID"}, reconciliation=reconciliation, result_hash=result_hash)
+        built = result.build(
+            summary, data_quality=integrity.as_dict(applied=len(applied_ids)),
+            reconciliation=reconciliation, result_hash=result_hash,
+        )
         run.status = SimulationRunStatus.DONE.value
         run.result_json = to_primitive(built)
         run.result_hash = result_hash
@@ -417,6 +454,18 @@ class ReplaySimulationService:
                 "fees": amount(account.fees),
             },
             "strategy_state": strategy_state,
+            "applied_corporate_actions": sorted(
+                row.corporate_action_source_id
+                for row in self.db.query(SimulationAppliedCorporateActionORM).filter_by(run_id=replay.run_id).all()
+            ),
+            "dividend_entitlements": [
+                {
+                    "id": item.id, "source": item.corporate_action_source_id,
+                    "pay_date": item.pay_date, "quantity": amount(item.eligible_quantity),
+                    "amount": amount(item.total_amount), "status": item.status,
+                }
+                for item in CorporateActionRepository(self.db, auto_commit=False).entitlements(replay.run_id)
+            ],
         })
 
     def _load_result(self, run_id: str) -> ResultBuilder:

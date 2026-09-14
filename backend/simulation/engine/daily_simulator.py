@@ -26,6 +26,7 @@ class DailySimulatorDependencies:
     event_store: Any
     ledger: Any
     records: Any | None = None
+    corporate_action_records: Any | None = None
 
 
 class DailySimulator:
@@ -37,7 +38,11 @@ class DailySimulator:
     def run(self, spec: SimulationRunSpec, *, run_id: str | None = None, manifest: RunManifest | None = None) -> SimulationResult:
         data_manifest = self.d.market_data.manifest()
         bars = list(self.d.market_data.iter_daily_events(list(spec.universe), spec.start, spec.end))
-        self._validate(spec, bars)
+        actions = list(self.d.corporate_actions.events(
+            list(spec.universe), spec.start, spec.end, spec.data_version_id,
+            verification_level=spec.verification_level,
+        )) if self.d.corporate_actions and spec.data_version_id else []
+        integrity = self._validate(spec, bars, actions=actions, manifest=data_manifest)
         run_id = run_id or f"sim_{sha256_value(spec)[:12]}"
         manifest = manifest or ManifestService(engine_version="sim-daily-v1b").build(
             run_id, spec, dataset_hash=data_manifest.dataset_hash,
@@ -61,8 +66,15 @@ class DailySimulator:
         )
         result.ledger.append(opening)
         self.d.ledger.append(opening)
+        actions_by_session = {}
+        for action in actions:
+            actions_by_session.setdefault(action.ex_date, []).append(action)
+        action_records = self.d.corporate_action_records
         state = DailySessionState(
             run_id, spec, account, result, history, {}, sessions, bars_by_session,
+            corporate_actions_by_session=actions_by_session,
+            applied_action_ids=action_records.applied_ids(run_id) if action_records else set(),
+            dividend_entitlements=action_records.entitlements(run_id) if action_records else [],
         )
         kernel = DailySessionKernel(self.d, state)
         kernel.start(min(item.ts_open for item in bars))
@@ -70,7 +82,14 @@ class DailySimulator:
             kernel.process_session(index)
         last = max(bars_by_session[sessions[-1]].values(), key=lambda item: item.ts_close)
         kernel.finish(last.ts_close)
-        reconciliation = ReconciliationService().reconcile(spec.initial_cash, result.ledger, result.fills, account)
+        reconciliation = ReconciliationService().reconcile(
+            spec.initial_cash,
+            result.ledger,
+            result.fills,
+            account,
+            corporate_actions=actions,
+            applied_corporate_action_ids=state.applied_action_ids,
+        )
         summary = {
             "status": "DONE", "initial_cash": spec.initial_cash, "final_equity": account.equity,
             "ending_cash": account.base_cash.total, "realized_pnl": account.realized_pnl,
@@ -83,28 +102,17 @@ class DailySimulator:
             "ledger": result.ledger, "portfolio": result.portfolio_snapshots,
             "positions": result.position_snapshots, "summary": summary,
         })
-        return result.build(summary, data_quality={"status": "VALID"}, reconciliation=reconciliation, result_hash=result_hash)
+        return result.build(
+            summary,
+            data_quality=integrity.as_dict(applied=len(state.applied_action_ids)),
+            reconciliation=reconciliation,
+            result_hash=result_hash,
+        )
 
     @staticmethod
-    def _validate(spec, bars):  # noqa: ANN001
-        grouped = {instrument: [] for instrument in spec.universe}
-        for bar in bars:
-            if bar.instrument not in grouped:
-                raise ValueError(f"INSTRUMENT_DATA_NOT_FOUND: {bar.instrument.key}")
-            if spec.data_version_id and bar.data_version_id != spec.data_version_id:
-                raise ValueError("VERIFIED_DATA_MISSING: data version mismatch")
-            grouped[bar.instrument].append(bar)
-        for instrument, values in grouped.items():
-            if not values:
-                raise ValueError(f"INSTRUMENT_DATA_NOT_FOUND: {instrument.key}")
-            if values != sorted(values, key=lambda item: item.ts_open):
-                raise ValueError("VERIFIED_DATA_MISSING: sessions are not monotonic")
-            if len({item.ts_open.date() for item in values}) != len(values):
-                raise ValueError("DUPLICATE_BAR")
-        if spec.verification_level.value == "VERIFIED":
-            expected = sorted({bar.ts_open.date() for bar in bars})
-            for instrument, values in grouped.items():
-                present = {bar.ts_open.date() for bar in values}
-                missing = [day.isoformat() for day in expected if day not in present]
-                if missing:
-                    raise ValueError(f"VERIFIED_DATA_MISSING: instrument={instrument.key}; missing_sessions={missing}")
+    def _validate(spec, bars, *, actions=(), manifest=None):  # noqa: ANN001
+        from backend.simulation.services.market_data_integrity_service import MarketDataIntegrityService
+
+        report = MarketDataIntegrityService().validate(spec, bars, actions=actions, manifest=manifest)
+        MarketDataIntegrityService.require_valid(report)
+        return report

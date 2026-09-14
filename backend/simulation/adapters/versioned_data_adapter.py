@@ -10,6 +10,7 @@ from backend.services.price_series_service import PricePoint, get_price_series
 from backend.simulation.domain.identifiers import InstrumentId
 from backend.simulation.domain.market import MarketBar, MarketDataManifest
 from backend.models import PriceEodORM
+from backend.simulation.services.market_data_integrity_service import MarketDataIntegrityService
 
 
 class VersionedDataAdapter:
@@ -81,6 +82,10 @@ class VersionedDataAdapter:
                 raise ValueError(f"INSTRUMENT_DATA_NOT_FOUND: {instrument.key}")
             for row in rows:
                 session = date.fromisoformat(row.trade_date)
+                MarketDataIntegrityService.validate_bar_values(
+                    open_price=row.open, high=row.high, low=row.low, close=row.close,
+                    volume=row.volume, instrument=instrument.key, session=row.trade_date,
+                )
                 events.append(MarketBar(
                     instrument=instrument,
                     ts_open=datetime.combine(session, time(14, 30), timezone.utc),
