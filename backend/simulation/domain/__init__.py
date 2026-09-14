@@ -18,6 +18,7 @@ from backend.simulation.domain.reconciliation import (
     MatchStatus,
     ReconciliationStatus,
 )
+from backend.simulation.domain.replay import ReplayControlStatus, ReplayState
 from backend.simulation.domain.results import PortfolioSnapshot, PositionSnapshot, SimulationResult
 from backend.simulation.domain.run import RunManifest, RunStatus, SimulationRunSpec
 from backend.simulation.domain.strategy import StrategyContext, StrategyIntent

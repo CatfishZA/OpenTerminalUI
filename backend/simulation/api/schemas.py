@@ -81,6 +81,10 @@ class SimulationRunCreate(StrictModel):
             raise ValueError("INVALID_DATE_RANGE: end date must not precede start date")
         if self.verification_level is VerificationLevel.VERIFIED and not self.data_version_id:
             raise ValueError("DATA_VERSION_REQUIRED: VERIFIED simulations require data_version_id")
+        if self.mode is SimulationMode.REPLAY and not self.data_version_id:
+            raise ValueError("REPLAY_DATA_VERSION_REQUIRED")
+        if self.mode is SimulationMode.REPLAY and self.verification_level is VerificationLevel.SYNTHETIC:
+            raise ValueError("REPLAY_SYNTHETIC_UNSUPPORTED")
         unsupported = sorted({item.asset_class for item in self.universe if item.asset_class != "EQUITY"})
         if unsupported:
             raise ValueError(f"UNSUPPORTED_ASSET_CLASS: {', '.join(unsupported)}")
@@ -121,6 +125,55 @@ class CollectionResponse(StrictModel):
     run_id: str
     items: list[dict[str, Any]]
     count: int
+
+
+class ReplayCreate(StrictModel):
+    verification_level: VerificationLevel
+    strategy: StrategySchema
+    universe: list[InstrumentSchema] = Field(min_length=1)
+    start: date
+    end: date
+    account: AccountSchema
+    data_version_id: str | None = None
+    execution: ExecutionSchema = Field(default_factory=ExecutionSchema)
+    commission: CommissionSchema = Field(default_factory=CommissionSchema)
+    seed: int = 42
+    benchmark: InstrumentSchema | None = None
+
+    @model_validator(mode="after")
+    def validate_replay(self) -> "ReplayCreate":
+        if self.end < self.start:
+            raise ValueError("INVALID_DATE_RANGE: end date must not precede start date")
+        if not self.data_version_id:
+            raise ValueError("REPLAY_DATA_VERSION_REQUIRED")
+        if self.verification_level is VerificationLevel.SYNTHETIC:
+            raise ValueError("REPLAY_SYNTHETIC_UNSUPPORTED")
+        unsupported = sorted({item.asset_class for item in self.universe if item.asset_class != "EQUITY"})
+        if unsupported:
+            raise ValueError(f"UNSUPPORTED_ASSET_CLASS: {', '.join(unsupported)}")
+        return self
+
+
+class ReplayAdvance(StrictModel):
+    sessions: int = Field(default=1, ge=1, le=100)
+
+
+class ReplayRunTo(StrictModel):
+    target_session: date
+
+
+class ReplayStateResponse(StrictModel):
+    run_id: str
+    mode: SimulationMode = SimulationMode.REPLAY
+    status: str
+    current_session: date | None
+    next_session: date | None
+    completed_sessions: int
+    total_sessions: int
+    current_time: datetime | None
+    last_event_sequence: int
+    progress: Decimal
+    checkpoint_hash: str | None
 
 
 class ReconciliationCreate(StrictModel):

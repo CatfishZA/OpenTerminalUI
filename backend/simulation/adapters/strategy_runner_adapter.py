@@ -83,3 +83,17 @@ class StrategyRunnerAdapter:
 
     def on_finish(self, ctx: StrategyContext) -> None:
         return None
+
+    def export_state(self) -> dict[str, Any]:
+        return {
+            "last_signal": {
+                instrument.key: signal
+                for instrument, signal in sorted(self._last_signal.items(), key=lambda item: item[0].key)
+            }
+        }
+
+    def import_state(self, state: dict[str, Any]) -> None:
+        raw = dict(state or {}).get("last_signal", {})
+        if not isinstance(raw, dict):
+            raise ValueError("REPLAY_CHECKPOINT_MISMATCH: invalid strategy state")
+        self._last_signal = {InstrumentId.parse(str(key)): int(value) for key, value in raw.items()}

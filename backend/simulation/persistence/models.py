@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -39,6 +39,33 @@ class SimulationRunORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SimulationReplaySessionORM(Base):
+    __tablename__ = "simulation_replay_sessions"
+    __table_args__ = (
+        Index("ix_sim_replay_control_status", "control_status"),
+        Index("ix_sim_replay_updated_at", "updated_at"),
+    )
+
+    run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("simulation_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    control_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    start_session: Mapped[date] = mapped_column(Date, nullable=False)
+    end_session: Mapped[date] = mapped_column(Date, nullable=False)
+    current_session: Mapped[date | None] = mapped_column(Date, nullable=True)
+    next_session: Mapped[date | None] = mapped_column(Date, nullable=True)
+    completed_sessions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_sessions: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_event_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    strategy_state_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    initialized: Mapped[bool] = mapped_column(nullable=False, default=False)
+    finish_called: Mapped[bool] = mapped_column(nullable=False, default=False)
+    checkpoint_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class SimulationEventORM(Base):
