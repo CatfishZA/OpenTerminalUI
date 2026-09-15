@@ -10,6 +10,8 @@ from backend.simulation.domain.events import SimulationEvent
 from backend.simulation.domain.identifiers import InstrumentId
 from backend.simulation.domain.strategy import StrategyContext, StrategyIntent
 
+COMPLETED_BAR_CAPABILITY = "COMPLETED_BAR"
+
 
 @dataclass(slots=True)
 class StrategyRunnerAdapter:
@@ -22,6 +24,13 @@ class StrategyRunnerAdapter:
     strategy_key: str
     strategy_context: dict[str, Any]
     _last_signal: dict[InstrumentId, int] = field(default_factory=dict, init=False)
+
+    @property
+    def capabilities(self) -> frozenset[str]:
+        return frozenset({COMPLETED_BAR_CAPABILITY})
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.capabilities
 
     def run_signals(self, frame: Any) -> Any:
         from backend.core.strategy_runner import StrategyRunner

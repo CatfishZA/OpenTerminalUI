@@ -4,7 +4,7 @@ import enum
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.shared.db import Base
@@ -664,6 +664,108 @@ class StrategyGovernanceDecisionORM(Base):
     )
     request_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class PaperStrategyDeploymentORM(Base):
+    __tablename__ = "paper_strategy_deployments"
+    __table_args__ = (
+        Index("ix_paper_strategy_deployment_status", "status"),
+        Index("ix_paper_strategy_deployment_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"pdep_{uuid4().hex}")
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    governance_record_id: Mapped[str] = mapped_column(String(64), ForeignKey("strategy_governance_records.id", ondelete="RESTRICT"), nullable=False, index=True)
+    governance_decision_id: Mapped[str] = mapped_column(String(64), ForeignKey("strategy_governance_decisions.id", ondelete="RESTRICT"), nullable=False)
+    baseline_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("simulation_runs.id", ondelete="RESTRICT"), nullable=False)
+    portfolio_id: Mapped[str] = mapped_column(String(36), ForeignKey("virtual_portfolios.id", ondelete="RESTRICT"), nullable=False, index=True)
+    simulation_run_id: Mapped[str] = mapped_column(String(64), ForeignKey("simulation_runs.id", ondelete="RESTRICT"), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    strategy_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    strategy_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    code_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    approved_evidence_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    symbols_json: Mapped[list] = mapped_column(JSON, nullable=False)
+    strategy_config_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    strategy_config_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    risk_policy_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    strategy_state_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    checkpoint_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_input_event_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    last_input_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_decision_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    risk_day: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    day_start_equity: Mapped[object | None] = mapped_column(Numeric(38, 18), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    halted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class PaperStrategyInputORM(Base):
+    __tablename__ = "paper_strategy_inputs"
+    __table_args__ = (
+        UniqueConstraint("deployment_id", "source_event_id", name="uq_paper_strategy_input_source"),
+        UniqueConstraint("deployment_id", "accepted_sequence", name="uq_paper_strategy_input_sequence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"pin_{uuid4().hex}")
+    deployment_id: Mapped[str] = mapped_column(String(64), ForeignKey("paper_strategy_deployments.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_event_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    instrument_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    input_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    accepted_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    processed_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PaperStrategyIntentORM(Base):
+    __tablename__ = "paper_strategy_intents"
+    __table_args__ = (
+        UniqueConstraint("deployment_id", "input_id", "ordinal", name="uq_paper_strategy_intent_ordinal"),
+        UniqueConstraint("deployment_id", "intent_id", name="uq_paper_strategy_intent_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"pintrow_{uuid4().hex}")
+    intent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    deployment_id: Mapped[str] = mapped_column(String(64), ForeignKey("paper_strategy_deployments.id", ondelete="CASCADE"), nullable=False, index=True)
+    input_id: Mapped[str] = mapped_column(String(64), ForeignKey("paper_strategy_inputs.id", ondelete="CASCADE"), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    instrument_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    quantity: Mapped[object] = mapped_column(Numeric(38, 18), nullable=False)
+    order_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    tif: Mapped[str] = mapped_column(String(8), nullable=False)
+    limit_price: Mapped[object | None] = mapped_column(Numeric(38, 18), nullable=True)
+    stop_price: Mapped[object | None] = mapped_column(Numeric(38, 18), nullable=True)
+    intent_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    risk_decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    risk_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    canonical_order_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("simulation_orders.id", ondelete="SET NULL"), nullable=True, index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class PaperStrategyEventORM(Base):
+    __tablename__ = "paper_strategy_events"
+    __table_args__ = (UniqueConstraint("deployment_id", "sequence", name="uq_paper_strategy_event_sequence"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"pde_{uuid4().hex}")
+    deployment_id: Mapped[str] = mapped_column(String(64), ForeignKey("paper_strategy_deployments.id", ondelete="CASCADE"), nullable=False, index=True)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class OpsKillSwitchORM(Base):

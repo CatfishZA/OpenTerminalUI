@@ -108,7 +108,7 @@ def test_public_paper_api_contract_and_canonical_artifacts(db_session) -> None: 
     assert pnl["realized_pnl"] == 200
 
 
-def test_deploy_strategy_creates_provenance_without_marker_order(db_session) -> None:  # noqa: ANN001
+def test_legacy_deploy_strategy_payload_cannot_claim_governed_automation(db_session) -> None:  # noqa: ANN001
     client = _client(db_session)
     response = client.post(
         "/api/paper/deploy-strategy",
@@ -121,9 +121,4 @@ def test_deploy_strategy_creates_provenance_without_marker_order(db_session) -> 
             "context": {"window": 20},
         },
     )
-    assert response.status_code == 200
-    run_id = response.json()["simulation_run_id"]
-    manifest = client.get(f"/api/v1/simulation/runs/{run_id}/manifest")
-    assert manifest.status_code == 200
-    assert manifest.json()["strategy_key"] == "example:sma"
-    assert client.get(f"/api/v1/simulation/runs/{run_id}/orders").json()["count"] == 0
+    assert response.status_code == 422

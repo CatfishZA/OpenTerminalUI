@@ -105,6 +105,10 @@ class PaperSimulationService:
         execution_profile: dict[str, Any] | None = None,
         commission_profile: dict[str, Any] | None = None,
         settlement_profile: dict[str, Any] | None = None,
+        strategy_hash: str | None = None,
+        code_hash: str | None = None,
+        request_metadata: dict[str, Any] | None = None,
+        manifest_metadata: dict[str, Any] | None = None,
     ) -> VirtualPortfolio:
         started_at = _now()
         portfolio = VirtualPortfolio(
@@ -129,11 +133,12 @@ class PaperSimulationService:
         )
         run_id = f"sim_{uuid4().hex[:12]}"
         account_id = f"acct_{run_id[4:]}"
-        request = to_primitive(spec)
+        request = {**to_primitive(spec), **to_primitive(request_metadata or {})}
+        resolved_strategy_hash = strategy_hash or sha256_value({"key": spec.strategy_key, "context": spec.strategy_context})
         manifest_basis = {
             "engine_version": PAPER_ENGINE_VERSION,
             "git_commit": None,
-            "strategy_hash": sha256_value({"key": spec.strategy_key, "context": spec.strategy_context}),
+            "strategy_hash": resolved_strategy_hash,
             "strategy_key": spec.strategy_key,
             "strategy_context_hash": sha256_value(spec.strategy_context),
             "data_version_id": None,
@@ -148,6 +153,7 @@ class PaperSimulationService:
             "seed": 0,
             "request_hash": sha256_value(request),
         }
+        manifest_basis.update(to_primitive(manifest_metadata or {}))
         manifest = {
             "run_id": run_id,
             **manifest_basis,
@@ -162,7 +168,7 @@ class PaperSimulationService:
                 status=SimulationRunStatus.RUNNING.value,
                 strategy_key=spec.strategy_key,
                 strategy_hash=manifest_basis["strategy_hash"],
-                code_hash=None,
+                code_hash=code_hash,
                 data_version_id=None,
                 engine_version=PAPER_ENGINE_VERSION,
                 seed=0,
@@ -215,6 +221,9 @@ class PaperSimulationService:
         submitted_at: datetime | None = None,
         reconciliation_key: str | None = None,
         strategy_order_id: str | None = None,
+        time_in_force: TimeInForce = TimeInForce.GTC,
+        eligible_at: datetime | None = None,
+        order_metadata: dict[str, Any] | None = None,
     ) -> VirtualOrder:
         if not portfolio.simulation_run_id:
             raise ValueError("PAPER_PORTFOLIO_MIGRATION_REQUIRED")
@@ -252,7 +261,7 @@ class PaperSimulationService:
                     order_type=canonical_type,
                     quantity=quantity,
                     remaining_quantity=quantity,
-                    tif=TimeInForce.GTC,
+                    tif=time_in_force,
                     submitted_at=now,
                     limit_price=limit_price,
                     stop_price=stop_price,
@@ -262,6 +271,7 @@ class PaperSimulationService:
                         "slippage_bps": str(slippage_bps),
                         "commission": str(commission),
                         **({"reconciliation_key": reconciliation_key} if reconciliation_key else {}),
+                        **dict(order_metadata or {}),
                     },
                 )
                 self._append_event(run_id, EventType.ORDER_SUBMITTED, now, order_id=order.id)
@@ -279,6 +289,7 @@ class PaperSimulationService:
                         account,
                         order,
                         accepted_at=now,
+                        eligible_at=eligible_at,
                         reserve_price=reserve_price,
                         execution_model=execution_model,
                         commission_model=commission_model,
@@ -380,6 +391,38 @@ class PaperSimulationService:
                 self.db.commit()
             self._engine_for(run_id).valuation_engine.value(account, _MARKS.get(run_id, {}))
             return account
+
+    async def mark_account(
+        self,
+        portfolio: VirtualPortfolio,
+        *,
+        instrument: InstrumentId,
+        price: Decimal,
+        at: datetime,
+        source: str,
+    ) -> AccountState:
+        """Persist a valuation mark without treating a completed bar as an execution tick."""
+        if not portfolio.simulation_run_id:
+            raise ValueError("PAPER_PORTFOLIO_MIGRATION_REQUIRED")
+        run_id = portfolio.simulation_run_id
+        async with self.lock_for(run_id):
+            try:
+                account = self._load_account(run_id)
+                self._process_due_settlements(portfolio, account, at.date(), at)
+                _MARKS.setdefault(run_id, {})[instrument] = price
+                self._engine_for(run_id).valuation_engine.value(account, _MARKS[run_id])
+                self.projection.project_account(self.db, portfolio, account)
+                self._append_event(
+                    run_id, EventType.MARK, at,
+                    payload={"instrument": instrument.key, "price": str(price), "source": source},
+                )
+                self._save_snapshot(run_id, account, at)
+                self._append_event(run_id, EventType.PORTFOLIO_SNAPSHOT, at, payload={"mark_only": True})
+                self.db.commit()
+                return account
+            except Exception:
+                self.db.rollback()
+                raise
 
     async def performance(self, portfolio: VirtualPortfolio) -> dict[str, Any]:
         account = await self.current_account(portfolio)
@@ -781,7 +824,9 @@ class PaperSimulationService:
     @staticmethod
     def _commission_model(order: Order):  # noqa: ANN205
         fixed = _decimal(order.metadata.get("commission", "0"))
-        return FixedCommissionModel(fixed) if fixed > 0 else BpsCommissionModel(Decimal("5"))
+        return FixedCommissionModel(fixed) if fixed > 0 else BpsCommissionModel(
+            _decimal(order.metadata.get("commission_bps", "5"))
+        )
 
     def _fresh(self, tick: MarketTick | None, now: datetime) -> bool:
         if tick is None or tick.ts > now:

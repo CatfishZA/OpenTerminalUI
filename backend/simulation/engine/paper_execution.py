@@ -45,6 +45,7 @@ class PaperExecutionEngine:
         order: Order,
         *,
         accepted_at: datetime,
+        eligible_at: datetime | None = None,
         reserve_price: Decimal | None,
         execution_model,
         commission_model,
@@ -87,7 +88,7 @@ class PaperExecutionEngine:
                 raise ValueError("INSUFFICIENT_CASH")
             account.cash[account.base_currency] = replace(cash, reserved=cash.reserved + reservation)
             account.buying_power = account.base_cash.available
-        accepted = self.order_manager.accept(order, accepted_at, accepted_at)
+        accepted = self.order_manager.accept(order, accepted_at, eligible_at or accepted_at)
         accepted = replace(accepted, metadata={**accepted.metadata, "cash_reservation": str(reservation)})
         account.open_orders[accepted.id] = accepted
         return accepted

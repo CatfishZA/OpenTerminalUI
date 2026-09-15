@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_db
@@ -18,6 +19,9 @@ from backend.models import (
     VirtualTrade,
 )
 from backend.paper_trading import get_paper_engine
+from backend.paper_trading.deployment_domain import CompletedBarObservation, DeploymentError
+from backend.paper_trading.strategy_deployment_service import StrategyDeploymentService
+from backend.simulation.domain.identifiers import InstrumentId
 from backend.simulation.services.paper_simulation_service import PaperSimulationService
 from backend.simulation.persistence.models import SimulationRunORM
 
@@ -46,12 +50,31 @@ class OrderCreateRequest(BaseModel):
 
 
 class DeployStrategyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    governance_record_id: str
     name: str = "Strategy Paper Portfolio"
-    initial_capital: Decimal = Field(default=Decimal("100000"), gt=0)
-    symbol: str
-    market: str = "NSE"
-    strategy: str
-    context: dict[str, Any] = Field(default_factory=dict)
+    risk_policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeploymentActionRequest(BaseModel):
+    reason: str = ""
+
+
+class CompletedBarRequest(BaseModel):
+    deployment_id: str
+    source_event_id: str
+    instrument: str
+    interval: str = "1d"
+    start_time: datetime
+    end_time: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
+    source: str
+    complete: bool = True
 
 
 def _portfolio_for_user(db: Session, portfolio_id: str, user_id: str) -> VirtualPortfolio:
@@ -331,21 +354,137 @@ async def get_performance(
     return metrics
 
 
+def _deployment_error(exc: DeploymentError) -> HTTPException:
+    status = 404 if exc.code in {"DEPLOYMENT_NOT_FOUND", "GOVERNANCE_RECORD_NOT_FOUND"} else 403 if exc.code == "DEPLOYMENT_ACCESS_DENIED" else 400
+    return HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)})
+
+
 @router.post("/paper/deploy-strategy")
 def deploy_strategy(
     payload: DeployStrategyRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    portfolio = PaperSimulationService(db).create_portfolio(
-        user_id=current_user.id,
-        name=payload.name.strip() or "Strategy Paper Portfolio",
-        initial_cash=payload.initial_capital,
-        base_currency="INR" if payload.market.strip().upper() in {"NSE", "BSE"} else "USD",
-        strategy_key=payload.strategy,
-        strategy_context={**payload.context, "symbol": payload.symbol, "market": payload.market},
-    )
-    return {"portfolio_id": portfolio.id, "status": "deployed", "simulation_run_id": portfolio.simulation_run_id}
+    try:
+        return StrategyDeploymentService(db).create(
+            governance_record_id=payload.governance_record_id,
+            user_id=current_user.id,
+            name=payload.name,
+            risk_policy=payload.risk_policy,
+        )
+    except DeploymentError as exc:
+        raise _deployment_error(exc) from exc
+
+
+@router.post("/paper/deployments")
+def create_strategy_deployment(
+    payload: DeployStrategyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    return deploy_strategy(payload, db, current_user)
+
+
+@router.get("/paper/deployments")
+def list_strategy_deployments(
+    status: str | None = None,
+    strategy_key: str | None = None,
+    governance_record_id: str | None = None,
+    offset: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {"items": StrategyDeploymentService(db).list(
+        user_id=current_user.id, status=status, strategy_key=strategy_key,
+        governance_record_id=governance_record_id, offset=offset, limit=min(limit, 200),
+    )}
+
+
+@router.get("/paper/deployments/{deployment_id}")
+def get_strategy_deployment(
+    deployment_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        return StrategyDeploymentService(db).get(deployment_id, user_id=current_user.id)
+    except DeploymentError as exc:
+        raise _deployment_error(exc) from exc
+
+
+async def _deployment_action(deployment_id: str, action: str, payload: DeploymentActionRequest, db: Session, user_id: str) -> dict[str, Any]:
+    service = StrategyDeploymentService(db)
+    try:
+        if action == "start":
+            return await service.start(deployment_id, user_id=user_id)
+        if action == "pause":
+            return await service.pause(deployment_id, user_id=user_id)
+        if action == "resume":
+            return await service.resume(deployment_id, user_id=user_id)
+        if action == "stop":
+            return await service.stop(deployment_id, user_id=user_id, reason=payload.reason)
+        return await service.halt(deployment_id, user_id=user_id, reason=payload.reason)
+    except DeploymentError as exc:
+        raise _deployment_error(exc) from exc
+
+
+@router.post("/paper/deployments/{deployment_id}/start")
+async def start_strategy_deployment(deployment_id: str, payload: DeploymentActionRequest = DeploymentActionRequest(), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict[str, Any]:
+    return await _deployment_action(deployment_id, "start", payload, db, current_user.id)
+
+
+@router.post("/paper/deployments/{deployment_id}/pause")
+async def pause_strategy_deployment(deployment_id: str, payload: DeploymentActionRequest = DeploymentActionRequest(), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict[str, Any]:
+    return await _deployment_action(deployment_id, "pause", payload, db, current_user.id)
+
+
+@router.post("/paper/deployments/{deployment_id}/resume")
+async def resume_strategy_deployment(deployment_id: str, payload: DeploymentActionRequest = DeploymentActionRequest(), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict[str, Any]:
+    return await _deployment_action(deployment_id, "resume", payload, db, current_user.id)
+
+
+@router.post("/paper/deployments/{deployment_id}/stop")
+async def stop_strategy_deployment(deployment_id: str, payload: DeploymentActionRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict[str, Any]:
+    return await _deployment_action(deployment_id, "stop", payload, db, current_user.id)
+
+
+@router.post("/paper/deployments/{deployment_id}/halt")
+async def halt_strategy_deployment(deployment_id: str, payload: DeploymentActionRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict[str, Any]:
+    return await _deployment_action(deployment_id, "halt", payload, db, current_user.id)
+
+
+@router.get("/paper/deployments/{deployment_id}/events")
+def get_strategy_deployment_events(deployment_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict[str, Any]:
+    try:
+        return {"items": StrategyDeploymentService(db).events(deployment_id, user_id=current_user.id)}
+    except DeploymentError as exc:
+        raise _deployment_error(exc) from exc
+
+
+@router.get("/paper/deployments/{deployment_id}/intents")
+def get_strategy_deployment_intents(deployment_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict[str, Any]:
+    try:
+        return {"items": StrategyDeploymentService(db).intents(deployment_id, user_id=current_user.id)}
+    except DeploymentError as exc:
+        raise _deployment_error(exc) from exc
+
+
+@router.post("/paper/market/bar")
+async def ingest_strategy_completed_bar(payload: CompletedBarRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict[str, Any]:
+    service = StrategyDeploymentService(db)
+    try:
+        service.get(payload.deployment_id, user_id=current_user.id)
+        observation = CompletedBarObservation(
+            payload.source_event_id, InstrumentId.parse(payload.instrument), payload.interval,
+            payload.start_time, payload.end_time, payload.open, payload.high, payload.low,
+            payload.close, payload.volume, payload.source, payload.complete,
+        )
+        return await service.process_completed_bar(payload.deployment_id, observation)
+    except (DeploymentError, ValueError) as exc:
+        if isinstance(exc, DeploymentError):
+            raise _deployment_error(exc) from exc
+        raise HTTPException(status_code=400, detail={"code": "MARKET_INPUT_INVALID", "message": str(exc)}) from exc
 
 
 @router.post("/paper/orders/{order_id}/cancel")
