@@ -4,7 +4,7 @@ import enum
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.shared.db import Base
@@ -593,7 +593,77 @@ class ModelRegistryORM(Base):
     stage: Mapped[str] = mapped_column(String(16), default="staging", index=True)
     promoted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    simulation_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    governance_record_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("strategy_governance_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    governance_decision_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("strategy_governance_decisions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    evidence_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    evidence_level: Mapped[str | None] = mapped_column(String(16), nullable=True, default="LEGACY", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class StrategyGovernanceRecordORM(Base):
+    __tablename__ = "strategy_governance_records"
+    __table_args__ = (
+        UniqueConstraint("strategy_key", "strategy_hash", name="uq_strategy_governance_identity"),
+        Index("ix_strategy_governance_stage_key", "current_stage", "strategy_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"gov_{uuid4().hex}")
+    strategy_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    strategy_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    current_stage: Mapped[str] = mapped_column(String(16), nullable=False, default="CANDIDATE", index=True)
+    baseline_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    latest_paper_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    latest_reconciliation_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_reconciliations.id", ondelete="SET NULL"), nullable=True
+    )
+    latest_evidence_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StrategyGovernanceDecisionORM(Base):
+    __tablename__ = "strategy_governance_decisions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"gdec_{uuid4().hex}")
+    governance_record_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("strategy_governance_records.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    decision_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    from_stage: Mapped[str] = mapped_column(String(16), nullable=False)
+    to_stage: Mapped[str] = mapped_column(String(16), nullable=False)
+    baseline_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    paper_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    reconciliation_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_reconciliations.id", ondelete="SET NULL"), nullable=True
+    )
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    evidence_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    evidence_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    checks_json: Mapped[list] = mapped_column(JSON, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    request_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class OpsKillSwitchORM(Base):

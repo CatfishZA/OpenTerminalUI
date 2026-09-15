@@ -25,6 +25,26 @@ def fixtures_dir() -> Path:
 
 
 @pytest.fixture
+def governance_db():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    import backend.models  # noqa: F401
+    from backend.shared.db import Base
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, autocommit=False, autoflush=False)()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+@pytest.fixture
 def mock_adapter():
     from backend.adapters.mock import MockDataAdapter
 

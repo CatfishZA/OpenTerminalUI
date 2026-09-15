@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,7 +8,9 @@ from sqlalchemy.orm import Session
 
 from backend.api.deps import get_db
 from backend.auth.deps import get_current_user
-from backend.models import ModelRegistryORM, ModelRun, User
+from backend.governance.domain import GovernanceStage
+from backend.governance.service import GovernanceError, StrategyGovernanceService
+from backend.models import ModelRun, User
 from backend.oms.service import log_audit
 
 router = APIRouter()
@@ -27,6 +28,33 @@ class PromoteRequest(BaseModel):
     run_id: str
     stage: str = Field(default="staging", pattern="^(staging|prod)$")
     metadata: dict[str, Any] = Field(default_factory=dict)
+    paper_run_id: str | None = None
+    reconciliation_id: str | None = None
+    reason: str = ""
+
+
+class StrategyEvaluationRequest(BaseModel):
+    baseline_run_id: str
+    target_stage: str = Field(pattern="^(STAGING|PROD|staging|prod)$")
+    paper_run_id: str | None = None
+    reconciliation_id: str | None = None
+
+
+class StrategyPromotionRequest(StrategyEvaluationRequest):
+    reason: str
+    registry_name: str | None = None
+
+
+class RevokeRequest(BaseModel):
+    reason: str
+
+
+def _governance_error(exc: GovernanceError) -> HTTPException:
+    status = 404 if exc.code in {
+        "BASELINE_RUN_NOT_FOUND", "PAPER_RUN_NOT_FOUND", "RECONCILIATION_NOT_FOUND",
+        "GOVERNANCE_RECORD_NOT_FOUND",
+    } else 409
+    return HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)})
 
 
 @router.post("/governance/runs/register")
@@ -84,32 +112,111 @@ def promote_model(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    run = db.query(ModelRun).filter(ModelRun.id == payload.run_id).first()
-    if run is None:
-        raise HTTPException(status_code=404, detail="Model run not found")
-    entry = ModelRegistryORM(
-        name=payload.registry_name.strip(),
-        run_id=payload.run_id,
-        stage=payload.stage,
-        promoted_at=datetime.now(timezone.utc),
-        metadata_json=payload.metadata,
-        created_at=datetime.now(timezone.utc),
-    )
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
-    log_audit(
-        db=db,
-        event_type="governance_model_promoted",
-        entity_type="model_registry",
-        entity_id=entry.id,
-        payload={"name": entry.name, "run_id": entry.run_id, "stage": entry.stage},
-        user_id=current_user.id,
-    )
-    return {
-        "id": entry.id,
-        "name": entry.name,
-        "run_id": entry.run_id,
-        "stage": entry.stage,
-        "promoted_at": entry.promoted_at.isoformat() if entry.promoted_at else None,
-    }
+    service = StrategyGovernanceService(db)
+    try:
+        model_run, simulation = service.resolve_legacy_model_run(payload.run_id)
+        return service.promote(
+            baseline_run_id=simulation.id,
+            target_stage=GovernanceStage(payload.stage.upper()),
+            actor_user_id=current_user.id,
+            reason=payload.reason,
+            paper_run_id=payload.paper_run_id,
+            reconciliation_id=payload.reconciliation_id,
+            registry_name=payload.registry_name,
+            legacy_model_run_id=model_run.id,
+        )
+    except GovernanceError as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.post("/governance/strategies/evaluate")
+def evaluate_strategy(
+    payload: StrategyEvaluationRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        return StrategyGovernanceService(db).evaluate(
+            baseline_run_id=payload.baseline_run_id,
+            target_stage=payload.target_stage,
+            paper_run_id=payload.paper_run_id,
+            reconciliation_id=payload.reconciliation_id,
+        ).as_dict()
+    except GovernanceError as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.post("/governance/strategies/promote")
+def promote_strategy(
+    payload: StrategyPromotionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        return StrategyGovernanceService(db).promote(
+            baseline_run_id=payload.baseline_run_id,
+            target_stage=payload.target_stage,
+            actor_user_id=current_user.id,
+            reason=payload.reason,
+            paper_run_id=payload.paper_run_id,
+            reconciliation_id=payload.reconciliation_id,
+            registry_name=payload.registry_name,
+        )
+    except GovernanceError as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.get("/governance/strategies")
+def list_strategies(
+    stage: str | None = None,
+    strategy_key: str | None = None,
+    offset: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        return {"items": StrategyGovernanceService(db).list(
+            stage=stage, strategy_key=strategy_key, offset=max(0, offset), limit=min(max(1, limit), 200)
+        )}
+    except GovernanceError as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.get("/governance/strategies/{record_id}")
+def get_strategy(
+    record_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        return StrategyGovernanceService(db).get(record_id)
+    except GovernanceError as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.get("/governance/strategies/{record_id}/history")
+def strategy_history(
+    record_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        return {"items": StrategyGovernanceService(db).history(record_id)}
+    except GovernanceError as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.post("/governance/strategies/{record_id}/revoke")
+def revoke_strategy(
+    record_id: str,
+    payload: RevokeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        return StrategyGovernanceService(db).revoke(
+            record_id, actor_user_id=current_user.id, reason=payload.reason
+        )
+    except GovernanceError as exc:
+        raise _governance_error(exc) from exc
